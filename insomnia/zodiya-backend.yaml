@@ -1,0 +1,238 @@
+type: collection.insomnia.rest/5.0
+name: Zodiya Backend
+meta:
+    id: wrk_zodiya_backend_v2
+    created: 1789216567000
+    modified: 1789216567000
+collection:
+    - url: "{{ _.base_url }}/"
+      name: Health
+      meta:
+          id: req_zodiya_health
+          created: 1789216567000
+          modified: 1789216567000
+          isPrivate: false
+          sortKey: -3
+      method: GET
+      settings:
+          renderRequestBody: true
+          encodeUrl: true
+          followRedirects: global
+          cookies:
+              send: true
+              store: true
+          rebuildPath: true
+    - name: Auth
+      meta:
+          id: fld_zodiya_auth
+          created: 1789216567000
+          modified: 1789216567000
+          sortKey: -2
+      children:
+          - url: "{{ _.base_url }}/auth/register"
+            name: Register
+            meta:
+                id: req_zodiya_auth_register
+                created: 1789216567000
+                modified: 1789216567000
+                isPrivate: false
+                sortKey: -3
+            method: POST
+            body:
+                mimeType: application/json
+                text: |-
+                    {
+                        "firstName": "harshal",
+                        "lastName": "chauhan",
+                        "email": "{{ _.email }}",
+                        "password": "{{ _.password }}"
+                    }
+            headers:
+                - name: Content-Type
+                  value: application/json
+            settings:
+                renderRequestBody: true
+                encodeUrl: true
+                followRedirects: global
+                cookies:
+                    send: true
+                    store: true
+                rebuildPath: true
+          - url: "{{ _.base_url }}/auth/login"
+            name: Login
+            meta:
+                id: req_zodiya_auth_login
+                created: 1789216567000
+                modified: 1789216567000
+                isPrivate: false
+                sortKey: -2
+            method: POST
+            body:
+                mimeType: application/json
+                text: |-
+                    {
+                        "email": "{{ _.email }}",
+                        "password": "{{ _.password }}"
+                    }
+            headers:
+                - name: Content-Type
+                  value: application/json
+            settings:
+                renderRequestBody: true
+                encodeUrl: true
+                followRedirects: global
+                cookies:
+                    send: true
+                    store: true
+                rebuildPath: true
+          - url: "{{ _.base_url }}/auth/login"
+            name: Login (wrong password)
+            meta:
+                id: req_zodiya_auth_login_wrong
+                created: 1789216567000
+                modified: 1789216567000
+                isPrivate: false
+                sortKey: -1
+            method: POST
+            body:
+                mimeType: application/json
+                text: |-
+                    {
+                        "email": "{{ _.email }}",
+                        "password": "wrongpassword"
+                    }
+            headers:
+                - name: Content-Type
+                  value: application/json
+            settings:
+                renderRequestBody: true
+                encodeUrl: true
+                followRedirects: global
+                cookies:
+                    send: true
+                    store: true
+                rebuildPath: true
+    - name: Profiles
+      meta:
+          id: fld_zodiya_profiles
+          created: 1789217541000
+          modified: 1789217541000
+          sortKey: -1
+      children:
+          - url: "{{ _.base_url }}/profiles"
+            name: Create profile (primary)
+            meta:
+                id: req_zodiya_profiles_create
+                created: 1789217541000
+                modified: 1789217541000
+                isPrivate: false
+                sortKey: -4
+            method: POST
+            body:
+                mimeType: application/json
+                text: |-
+                    {
+                        "firstName": "harshal",
+                        "lastName": "chauhan",
+                        "birthDate": "1995-08-15",
+                        "birthTime": "14:30",
+                        "city": "Ahmedabad",
+                        "state": "Gujarat",
+                        "country": "India"
+                    }
+            headers:
+                - name: Content-Type
+                  value: application/json
+            settings:
+                renderRequestBody: true
+                encodeUrl: true
+                followRedirects: global
+                cookies:
+                    send: true
+                    store: true
+                rebuildPath: true
+          - url: "{{ _.base_url }}/profiles"
+            name: Create profile (spouse)
+            meta:
+                id: req_zodiya_profiles_create_spouse
+                created: 1789217541000
+                modified: 1789217541000
+                isPrivate: false
+                sortKey: -3
+            method: POST
+            body:
+                mimeType: application/json
+                text: |-
+                    {
+                        "firstName": "partner",
+                        "lastName": "chauhan",
+                        "birthDate": "1996-02-10",
+                        "birthTime": "09:15",
+                        "city": "Mumbai",
+                        "state": "Maharashtra",
+                        "country": "India",
+                        "relationship": "spouse"
+                    }
+            headers:
+                - name: Content-Type
+                  value: application/json
+            settings:
+                renderRequestBody: true
+                encodeUrl: true
+                followRedirects: global
+                cookies:
+                    send: true
+                    store: true
+                rebuildPath: true
+          - url: "{{ _.base_url }}/profiles"
+            name: List my profiles
+            meta:
+                id: req_zodiya_profiles_list
+                created: 1789217541000
+                modified: 1789217541000
+                isPrivate: false
+                sortKey: -2
+            method: GET
+            settings:
+                renderRequestBody: true
+                encodeUrl: true
+                followRedirects: global
+                cookies:
+                    send: true
+                    store: true
+                rebuildPath: true
+          - url: "{{ _.base_url }}/profiles/{{ _.profile_id }}"
+            name: Get profile
+            meta:
+                id: req_zodiya_profiles_get
+                created: 1789217541000
+                modified: 1789217541000
+                isPrivate: false
+                sortKey: -1
+            method: GET
+            settings:
+                renderRequestBody: true
+                encodeUrl: true
+                followRedirects: global
+                cookies:
+                    send: true
+                    store: true
+                rebuildPath: true
+cookieJar:
+    name: Default Jar
+    meta:
+        id: jar_zodiya_backend_v2
+        created: 1789216567000
+        modified: 1789216567000
+environments:
+    name: Base Environment
+    meta:
+        id: env_zodiya_base
+        created: 1789216567000
+        modified: 1789216567000
+        isPrivate: false
+    data:
+        base_url: http://localhost:5501
+        email: harshal@gmail.com
+        password: "1234567890"
+        profile_id: ""

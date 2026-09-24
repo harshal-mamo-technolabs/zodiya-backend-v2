@@ -1,0 +1,43 @@
+name: CI
+on:
+    pull_request:
+        branches:
+            - main
+    push:
+        branches:
+            - main
+
+jobs:
+    build-and-test:
+        name: Build The Project
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version-file: .nvmrc
+                  cache: npm
+
+            - name: Install Dependencies
+              run: npm ci
+
+            - name: Run Prettier
+              run: npm run format:check
+
+            - name: Run Eslint
+              run: npm run lint:check
+
+            - name: Test And Coverage
+              run: npm run test
+              env:
+                  PORT: 5501
+                  NODE_ENV: test
+                  MONGO_URI: mongodb://127.0.0.1:27017/zodiya_test
+                  REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
+                  PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+                  GOOGLE_MAPS_API_KEY: test-google-key
+
+            - name: Build-ts
+              run: npm run build
