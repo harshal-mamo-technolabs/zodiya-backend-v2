@@ -1,0 +1,17 @@
+services:
+    - type: web
+      name: zodiya-backend-v2
+      runtime: docker
+      dockerfilePath: ./docker/prod/Dockerfile
+      plan: free
+      autoDeploy: true
+      envVars:
+          # PORT is injected by Render; NODE_ENV is set in the Dockerfile
+          - key: MONGO_URI
+            sync: false
+          - key: REFRESH_TOKEN_SECRET
+            generateValue: true
+          - key: PRIVATE_KEY
+            sync: false
+          - key: GOOGLE_MAPS_API_KEY
+            sync: false
