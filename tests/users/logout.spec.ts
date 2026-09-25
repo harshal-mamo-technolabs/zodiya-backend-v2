@@ -1,22 +1,15 @@
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
-import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
+import { resetDB, countRows } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
+import { refreshTokens as refreshTokenTable } from "../../src/models/RefreshToken.ts"
 import { userData } from "../utils/index.ts"
 
 describe("POST /auth/logout", () => {
-    let mongod: MongoMemoryServer
     let cookies: string[]
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         const response = await request(app)
             .post("/auth/register")
             .send(userData)
@@ -27,11 +20,10 @@ describe("POST /auth/logout", () => {
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("should clear both cookies and revoke the refresh token", async () => {
-        expect(await RefreshTokenModel.countDocuments()).toBe(1)
+        expect(await countRows(refreshTokenTable)).toBe(1)
 
         const response = await request(app)
             .post("/auth/logout")
@@ -44,7 +36,7 @@ describe("POST /auth/logout", () => {
         expect(response.statusCode).toBe(204)
         expect(cleared).toMatch(/accessToken=;/)
         expect(cleared).toMatch(/refreshToken=;/)
-        expect(await RefreshTokenModel.countDocuments()).toBe(0)
+        expect(await countRows(refreshTokenTable)).toBe(0)
     })
 
     it("should still succeed with no cookies at all", async () => {
@@ -56,10 +48,10 @@ describe("POST /auth/logout", () => {
         await request(app)
             .post("/auth/login")
             .send({ email: userData.email, password: userData.password })
-        expect(await RefreshTokenModel.countDocuments()).toBe(2)
+        expect(await countRows(refreshTokenTable)).toBe(2)
 
         await request(app).post("/auth/logout").set("Cookie", cookies)
 
-        expect(await RefreshTokenModel.countDocuments()).toBe(1)
+        expect(await countRows(refreshTokenTable)).toBe(1)
     })
 })

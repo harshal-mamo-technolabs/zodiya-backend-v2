@@ -44,7 +44,7 @@ export default class TransitController {
             )
 
             this.logger.debug("Transits computed", {
-                profileId: profile.id,
+                profileId: profile._id,
                 events: reading.events.length,
             })
 

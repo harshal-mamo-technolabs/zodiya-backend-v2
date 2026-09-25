@@ -52,13 +52,13 @@ export default class SynastryController {
             )
 
             this.logger.debug("Synastry computed", {
-                a: a.id,
-                b: b.id,
+                a: a._id,
+                b: b._id,
                 contacts: reading.contacts.length,
             })
 
             const person = (p: typeof a) => ({
-                id: String(p._id),
+                id: p._id,
                 firstName: p.firstName,
                 name: `${p.firstName} ${p.lastName}`,
             })

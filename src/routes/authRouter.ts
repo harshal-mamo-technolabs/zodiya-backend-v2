@@ -3,9 +3,7 @@ import AuthController from "../controllers/AuthController.ts"
 import { UserService } from "../services/UserService.ts"
 import { TokenService } from "../services/TokenService.ts"
 import { CredentialService } from "../services/CredentialService.ts"
-import { UserModel } from "../models/User.ts"
-import { RefreshTokenModel } from "../models/RefreshToken.ts"
-import { ProfileModel } from "../models/Profile.ts"
+import { db } from "../config/db.ts"
 import authenticate from "../middlewares/authenticate.ts"
 import accountValidator from "../validators/accountValidator.ts"
 import { rateLimit } from "express-rate-limit"
@@ -29,8 +27,8 @@ const credentials = rateLimit({
     },
 })
 
-const userService = new UserService(UserModel, ProfileModel, RefreshTokenModel)
-const tokenService = new TokenService(RefreshTokenModel)
+const userService = new UserService(db)
+const tokenService = new TokenService(db)
 const credentialService = new CredentialService()
 const authController = new AuthController(
     userService,

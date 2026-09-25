@@ -10,6 +10,7 @@ export default {
     collectCoverage: true,
     coverageProvider: "v8",
     collectCoverageFrom: ["src/**/*.ts", "!tests/**", "!node_modules/**"],
-    // first MongoMemoryServer boot is slower than jest's 5s default
+    // needs the MySQL from docker-compose.yml; see DATABASE_URL in .env.test
+    globalSetup: "<rootDir>/tests/globalSetup.js",
     testTimeout: 20000,
 }

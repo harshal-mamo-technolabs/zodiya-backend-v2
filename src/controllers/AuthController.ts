@@ -11,7 +11,7 @@ import type {
     LoginUserRequest,
     RegisterUserRequest,
 } from "../types/index.ts"
-import type { UserDocument } from "../models/User.ts"
+import type { User } from "../models/User.ts"
 import type { UserService } from "../services/UserService.ts"
 import type { TokenService } from "../services/TokenService.ts"
 import type { CredentialService } from "../services/CredentialService.ts"
@@ -169,7 +169,7 @@ export default class AuthController {
                 next(createHttpError(404, "Account does not exist"))
                 return
             }
-            this.logger.info("Account updated", { id: user.id })
+            this.logger.info("Account updated", { id: user._id })
             res.status(200).json(this.account(user))
         } catch (e) {
             next(e)
@@ -194,19 +194,13 @@ export default class AuthController {
         }
     }
 
-    private account(user: UserDocument): AccountResponse {
-        const n = user.notifications
+    private account(user: User): AccountResponse {
         return {
-            id: user._id.toString(),
+            id: user._id,
             firstName: user.firstName,
             lastName: user.lastName,
             email: user.email,
-            notifications: {
-                daily: n?.daily ?? true,
-                transits: n?.transits ?? true,
-                retro: n?.retro ?? false,
-                deliveryTime: n?.deliveryTime ?? "07:30",
-            },
+            notifications: user.notifications,
             createdAt: user.createdAt.toISOString(),
         }
     }
@@ -254,7 +248,7 @@ export default class AuthController {
                 return
             }
             await this.setAuthCookies(res, user)
-            this.logger.debug("Session refreshed", { id: user.id })
+            this.logger.debug("Session refreshed", { id: user._id })
             res.status(204).end()
         } catch (e) {
             next(e)
@@ -276,9 +270,9 @@ export default class AuthController {
         }
     }
 
-    private async setAuthCookies(res: Response, user: UserDocument) {
+    private async setAuthCookies(res: Response, user: User) {
         const payload: JwtPayload = {
-            sub: user._id.toString(),
+            sub: user._id,
             role: user.role,
             firstName: user.firstName,
             lastName: user.lastName,

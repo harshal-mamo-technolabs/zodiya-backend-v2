@@ -7,7 +7,7 @@ services:
       autoDeploy: true
       envVars:
           # PORT is injected by Render; NODE_ENV is set in the Dockerfile
-          - key: MONGO_URI
+          - key: DATABASE_URL
             sync: false
           - key: REFRESH_TOKEN_SECRET
             generateValue: true

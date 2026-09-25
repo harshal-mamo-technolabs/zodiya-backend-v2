@@ -1,8 +1,7 @@
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
+import { resetDB } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
 import { TarotService } from "../../src/services/TarotService.ts"
 import {
     MAJOR_ARCANA,
@@ -167,22 +166,15 @@ describe("TarotService", () => {
 })
 
 describe("POST /tarot/draw", () => {
-    let mongod: MongoMemoryServer
     let cookie: string
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         cookie = await registerAndGetCookie(app)
     })
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("requires a session", async () => {

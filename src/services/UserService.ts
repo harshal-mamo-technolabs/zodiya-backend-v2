@@ -1,18 +1,17 @@
-import type { Model } from "mongoose"
+import { eq, getTableColumns } from "drizzle-orm"
 import createHttpError from "http-errors"
 import bcrypt from "bcrypt"
-import type { User } from "../models/User.ts"
-import type { Profile } from "../models/Profile.ts"
-import type { RefreshToken } from "../models/RefreshToken.ts"
+import type { Db } from "../config/db.ts"
+import { type User, users } from "../models/User.ts"
 import type { AccountPatch } from "../types/index.ts"
 import { type Role, Roles } from "../constants/index.ts"
 
+// every column but the hash; only login ever needs the password
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const { password: _password, ...publicColumns } = getTableColumns(users)
+
 export class UserService {
-    constructor(
-        private userModel: Model<User>,
-        private profileModel?: Model<Profile>,
-        private refreshTokenModel?: Model<RefreshToken>,
-    ) {}
+    constructor(private db: Db) {}
 
     async create(
         firstName: string,
@@ -20,8 +19,9 @@ export class UserService {
         email: string,
         password: string,
         role: Role = Roles.CUSTOMER,
-    ) {
-        const user = await this.userModel.findOne({ email })
+    ): Promise<User> {
+        email = email.trim().toLowerCase()
+        const user = await this.findByEmail(email)
         if (user) {
             const err = createHttpError(400, "Email already exist")
             throw err
@@ -31,13 +31,21 @@ export class UserService {
         const hashedPassword = await bcrypt.hash(password, saltRound)
 
         try {
-            return await this.userModel.create({
-                firstName,
-                lastName,
-                email,
-                password: hashedPassword,
-                role,
-            })
+            const [row] = await this.db
+                .insert(users)
+                .values({
+                    firstName: firstName.trim(),
+                    lastName: lastName.trim(),
+                    email,
+                    password: hashedPassword,
+                    role,
+                })
+                .$returningId()
+            const created = row && (await this.findById(row._id))
+            if (!created) {
+                throw new Error("insert returned no row")
+            }
+            return created
         } catch {
             const error = createHttpError(
                 500,
@@ -48,35 +56,40 @@ export class UserService {
     }
 
     async findByEmail(email: string) {
-        return await this.userModel.findOne({ email }).select("+password")
+        const [user] = await this.db
+            .select()
+            .from(users)
+            .where(eq(users.email, email.trim().toLowerCase()))
+        return user ?? null
     }
 
-    async findById(id: string) {
-        return await this.userModel.findById(id)
+    async findById(id: string): Promise<User | null> {
+        const [user] = await this.db
+            .select(publicColumns)
+            .from(users)
+            .where(eq(users._id, id))
+        return user ?? null
     }
 
     async update(id: string, patch: AccountPatch) {
-        const user = await this.userModel.findById(id)
+        const user = await this.findById(id)
         if (!user) {
             return null
         }
         const { notifications, ...rest } = patch
-        user.set(rest)
-        if (notifications) {
-            user.set("notifications", {
-                ...user.notifications,
-                ...notifications,
+        await this.db
+            .update(users)
+            .set({
+                ...rest,
+                notifications: { ...user.notifications, ...notifications },
             })
-        }
-        await user.save()
-        return user
+            .where(eq(users._id, id))
+        return await this.findById(id)
     }
 
-    /** The account and everything that hangs off it. */
+    /** The account and everything that hangs off it; profiles and tokens go by ON DELETE CASCADE. */
     async remove(id: string) {
-        await this.profileModel?.deleteMany({ user: id })
-        await this.refreshTokenModel?.deleteMany({ user: id })
-        const result = await this.userModel.deleteOne({ _id: id })
-        return result.deletedCount === 1
+        const [result] = await this.db.delete(users).where(eq(users._id, id))
+        return result.affectedRows === 1
     }
 }

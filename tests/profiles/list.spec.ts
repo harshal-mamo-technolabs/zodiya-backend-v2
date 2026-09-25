@@ -1,9 +1,8 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
+import { resetDB } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { Relationships } from "../../src/constants/index.ts"
 import type { Profile } from "../../src/models/Profile.ts"
@@ -15,16 +14,10 @@ import {
 } from "../utils/index.ts"
 
 describe("GET /profiles", () => {
-    let mongod: MongoMemoryServer
     let cookie: string
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
         cookie = await registerAndGetCookie(app)
     })
@@ -35,7 +28,6 @@ describe("GET /profiles", () => {
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("should return 200 status code", async () => {

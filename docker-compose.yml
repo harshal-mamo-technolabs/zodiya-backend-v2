@@ -1,0 +1,19 @@
+services:
+    mysql:
+        image: mysql:8.4
+        container_name: zodiya-mysql
+        restart: unless-stopped
+        environment:
+            MYSQL_ROOT_PASSWORD: root
+            MYSQL_DATABASE: zodiya
+            MYSQL_USER: zodiya
+            MYSQL_PASSWORD: zodiya
+        ports:
+            - "3306:3306"
+        volumes:
+            - zodiya-mysql-data:/var/lib/mysql
+            # runs in name order, only when the volume is empty: schema, then data
+            - ./scripts/sql:/docker-entrypoint-initdb.d:ro
+
+volumes:
+    zodiya-mysql-data:

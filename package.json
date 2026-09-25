@@ -18,6 +18,7 @@
         "lint:fix": "eslint --fix .",
         "typecheck": "tsc --noEmit",
         "keys:generate": "node scripts/generateKeys.js",
+        "db:migrate-from-mongo": "node --import @swc-node/register/esm-register scripts/migrate-mongo-to-mysql.ts",
         "prepare": "husky"
     },
     "lint-staged": {
@@ -31,13 +32,14 @@
         "bcrypt": "^6.0.0",
         "cookie-parser": "^1.4.7",
         "dotenv": "^17.4.2",
+        "drizzle-orm": "^0.45.3",
         "express": "^5.2.1",
         "express-jwt": "^8.5.1",
         "express-rate-limit": "^8.7.0",
         "express-validator": "^7.3.2",
         "http-errors": "^2.0.1",
         "jsonwebtoken": "^9.0.3",
-        "mongoose": "^9.10.0",
+        "mysql2": "^3.24.4",
         "tz-lookup": "^6.1.25",
         "winston": "^3.19.0"
     },
@@ -60,7 +62,7 @@
         "husky": "^9.1.7",
         "jest": "^30.5.1",
         "lint-staged": "^17.5.1",
-        "mongodb-memory-server": "^11.2.0",
+        "mongodb": "^7.6.0",
         "nodemon": "^3.1.14",
         "prettier": "^3.9.6",
         "supertest": "^7.2.2",
@@ -70,7 +72,6 @@
     },
     "allowScripts": {
         "bcrypt@6.0.0": true,
-        "mongodb-memory-server@11.2.0": true,
         "@swc/core@1.16.2": true,
         "unrs-resolver@1.12.2": true,
         "@parcel/watcher@2.6.0": true

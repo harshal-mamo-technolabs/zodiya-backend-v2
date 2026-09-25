@@ -1,13 +1,10 @@
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
+import { resetDB } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
 import { isJwt } from "../../src/utils/index.ts"
 
 describe("POST /auth/login", () => {
-    let mongod: MongoMemoryServer
-
     const userData = {
         firstName: "harshal",
         lastName: "chauhan",
@@ -15,20 +12,14 @@ describe("POST /auth/login", () => {
         password: "1234567890",
     }
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
 
         await request(app).post("/auth/register").send(userData)
     })
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     describe("given all fields", () => {

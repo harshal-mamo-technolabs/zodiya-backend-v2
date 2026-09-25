@@ -1,9 +1,8 @@
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
-import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
+import { resetDB, countRows } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
+import { refreshTokens as refreshTokenTable } from "../../src/models/RefreshToken.ts"
 import { userData } from "../utils/index.ts"
 
 const cookiesOf = (response: request.Response) =>
@@ -14,16 +13,10 @@ const cookiesOf = (response: request.Response) =>
     ).map((c) => c.split(";")[0] ?? "")
 
 describe("POST /auth/refresh", () => {
-    let mongod: MongoMemoryServer
     let cookies: string[]
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         cookies = cookiesOf(
             await request(app).post("/auth/register").send(userData),
         )
@@ -31,7 +24,6 @@ describe("POST /auth/refresh", () => {
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("issues a new pair and the new access cookie works", async () => {
@@ -59,9 +51,9 @@ describe("POST /auth/refresh", () => {
 
     it("rotates: the old refresh cookie is dead after one use", async () => {
         const refreshOnly = cookies.filter((c) => c.startsWith("refreshToken="))
-        expect(await RefreshTokenModel.countDocuments()).toBe(1)
+        expect(await countRows(refreshTokenTable)).toBe(1)
         await request(app).post("/auth/refresh").set("Cookie", refreshOnly)
-        expect(await RefreshTokenModel.countDocuments()).toBe(1)
+        expect(await countRows(refreshTokenTable)).toBe(1)
 
         const again = await request(app)
             .post("/auth/refresh")

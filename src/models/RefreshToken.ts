@@ -1,21 +1,21 @@
-import {
-    type HydratedDocument,
-    type InferSchemaType,
-    model,
-    Schema,
-} from "mongoose"
+import { char, datetime, mysqlTable } from "drizzle-orm/mysql-core"
+import { objectId } from "../utils/index.ts"
+import { users } from "./User.ts"
 
-const refreshTokenSchema = new Schema(
-    {
-        user: { type: Schema.Types.ObjectId, ref: "User", required: true },
-        expiresAt: { type: Date, required: true },
-    },
-    { timestamps: true },
-)
+// expired rows are purged by a MySQL event (scripts/sql/01_schema.sql)
+export const refreshTokens = mysqlTable("refresh_tokens", {
+    _id: char("id", { length: 24 }).primaryKey().$defaultFn(objectId),
+    user: char("user_id", { length: 24 })
+        .notNull()
+        .references(() => users._id, { onDelete: "cascade" }),
+    expiresAt: datetime("expires_at", { mode: "date", fsp: 3 }).notNull(),
+    createdAt: datetime("created_at", { mode: "date", fsp: 3 })
+        .notNull()
+        .$defaultFn(() => new Date()),
+    updatedAt: datetime("updated_at", { mode: "date", fsp: 3 })
+        .notNull()
+        .$defaultFn(() => new Date())
+        .$onUpdateFn(() => new Date()),
+})
 
-// TTL index: mongo deletes the document itself once expiresAt has passed
-refreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
-
-export type RefreshToken = InferSchemaType<typeof refreshTokenSchema>
-export type RefreshTokenDocument = HydratedDocument<RefreshToken>
-export const RefreshTokenModel = model("RefreshToken", refreshTokenSchema)
+export type RefreshToken = typeof refreshTokens.$inferSelect

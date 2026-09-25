@@ -1,9 +1,8 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
+import { resetDB } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import type { SharedChartResponse } from "../../src/types/index.ts"
 import {
@@ -14,7 +13,6 @@ import {
 } from "../utils/index.ts"
 
 describe("share links", () => {
-    let mongod: MongoMemoryServer
     let cookie: string
     let profileId: string
 
@@ -25,13 +23,8 @@ describe("share links", () => {
         return (response.body as { token?: string }).token ?? ""
     }
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
         cookie = await registerAndGetCookie(app)
 
@@ -48,7 +41,6 @@ describe("share links", () => {
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("should issue a token the owner can share", async () => {

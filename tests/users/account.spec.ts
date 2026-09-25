@@ -1,13 +1,12 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
+import { resetDB, countRows } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
-import { UserModel } from "../../src/models/User.ts"
-import { ProfileModel } from "../../src/models/Profile.ts"
-import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
+import { users as userTable } from "../../src/models/User.ts"
+import { profiles as profileTable } from "../../src/models/Profile.ts"
+import { refreshTokens as refreshTokenTable } from "../../src/models/RefreshToken.ts"
 import type { AccountResponse } from "../../src/types/index.ts"
 import {
     geoData,
@@ -17,18 +16,12 @@ import {
 } from "../utils/index.ts"
 
 describe("account", () => {
-    let mongod: MongoMemoryServer
     let cookie: string
     let own: string
     let other: string
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
         cookie = await registerAndGetCookie(app)
         const first = await request(app)
@@ -53,7 +46,6 @@ describe("account", () => {
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("GET /auth/me returns the account with default preferences", async () => {
@@ -111,13 +103,13 @@ describe("account", () => {
             .delete(`/profiles/${other}`)
             .set("Cookie", [cookie])
         expect(gone.statusCode).toBe(204)
-        expect(await ProfileModel.countDocuments()).toBe(1)
+        expect(await countRows(profileTable)).toBe(1)
 
         const kept = await request(app)
             .delete(`/profiles/${own}`)
             .set("Cookie", [cookie])
         expect(kept.statusCode).toBe(400)
-        expect(await ProfileModel.countDocuments()).toBe(1)
+        expect(await countRows(profileTable)).toBe(1)
     })
 
     it("DELETE /profiles/:id hides other people's profiles", async () => {
@@ -132,7 +124,7 @@ describe("account", () => {
     })
 
     it("DELETE /auth/me removes the account, its profiles and its sessions", async () => {
-        expect(await RefreshTokenModel.countDocuments()).toBe(1)
+        expect(await countRows(refreshTokenTable)).toBe(1)
         const response = await request(app)
             .delete("/auth/me")
             .set("Cookie", [cookie])
@@ -141,9 +133,9 @@ describe("account", () => {
             response.headers as unknown as { "set-cookie": string[] }
         )["set-cookie"].join(" ")
         expect(cleared).toMatch(/accessToken=;/)
-        expect(await UserModel.countDocuments()).toBe(0)
-        expect(await ProfileModel.countDocuments()).toBe(0)
-        expect(await RefreshTokenModel.countDocuments()).toBe(0)
+        expect(await countRows(userTable)).toBe(0)
+        expect(await countRows(profileTable)).toBe(0)
+        expect(await countRows(refreshTokenTable)).toBe(0)
 
         const after = await request(app).get("/auth/me").set("Cookie", [cookie])
         expect(after.statusCode).toBe(404)

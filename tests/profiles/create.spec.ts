@@ -1,27 +1,20 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
-import { ProfileModel } from "../../src/models/Profile.ts"
-import { UserModel } from "../../src/models/User.ts"
+import { resetDB, rows } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
+import { profiles as profileTable } from "../../src/models/Profile.ts"
+import { users as userTable } from "../../src/models/User.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { Relationships, ZodiacSigns } from "../../src/constants/index.ts"
 import { geoData, profileData, registerAndGetCookie } from "../utils/index.ts"
 
 describe("POST /profiles", () => {
-    let mongod: MongoMemoryServer
     let cookie: string
     let lookup: jest.SpiedFunction<GeoService["lookup"]>
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         lookup = jest
             .spyOn(GeoService.prototype, "lookup")
             .mockResolvedValue(geoData)
@@ -34,7 +27,6 @@ describe("POST /profiles", () => {
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     describe("Given all fields", () => {
@@ -53,10 +45,10 @@ describe("POST /profiles", () => {
                 .set("Cookie", [cookie])
                 .send(profileData)
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect((response.body as Record<string, string>).id).toBe(
-                profiles[0]?._id.toString(),
+                profiles[0]?._id,
             )
         })
 
@@ -66,11 +58,11 @@ describe("POST /profiles", () => {
                 .set("Cookie", [cookie])
                 .send(profileData)
 
-            const users = await UserModel.find()
-            const profiles = await ProfileModel.find()
+            const users = await rows(userTable)
+            const profiles = await rows(profileTable)
 
             expect(profiles).toHaveLength(1)
-            expect(profiles[0]?.user.toString()).toBe(users[0]?._id.toString())
+            expect(profiles[0]?.user).toBe(users[0]?._id)
             expect(profiles[0]?.firstName).toBe(profileData.firstName)
             expect(profiles[0]?.birthDate).toBe(profileData.birthDate)
             expect(profiles[0]?.birthTime).toBe(profileData.birthTime)
@@ -83,7 +75,7 @@ describe("POST /profiles", () => {
                 .set("Cookie", [cookie])
                 .send(profileData)
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect(lookup).toHaveBeenCalledWith(
                 profileData.city,
@@ -104,7 +96,7 @@ describe("POST /profiles", () => {
                 .set("Cookie", [cookie])
                 .send(profileData)
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect(profiles[0]?.zodiacSign).toBe(ZodiacSigns.LEO)
         })
@@ -124,7 +116,7 @@ describe("POST /profiles", () => {
                     relationship: Relationships.SPOUSE,
                 })
 
-            const profiles = await ProfileModel.find().sort({ createdAt: 1 })
+            const profiles = await rows(profileTable)
 
             expect(profiles).toHaveLength(2)
             expect(profiles[0]?.isPrimary).toBe(true)
@@ -138,7 +130,7 @@ describe("POST /profiles", () => {
                 .set("Cookie", [cookie])
                 .send(profileData)
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect(profiles[0]?.relationship).toBe(Relationships.SELF)
         })
@@ -156,7 +148,7 @@ describe("POST /profiles", () => {
                     zodiacSign: ZodiacSigns.ARIES,
                 })
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect(profiles[0]?.isPrimary).toBe(true)
             expect(profiles[0]?.lat).toBe(geoData.lat)
@@ -170,7 +162,7 @@ describe("POST /profiles", () => {
                 .post("/profiles")
                 .send(profileData)
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect(response.statusCode).toBe(401)
             expect(profiles).toHaveLength(0)
@@ -197,7 +189,7 @@ describe("POST /profiles", () => {
                 .set("Cookie", [cookie])
                 .send({ ...profileData, [field]: value })
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect(response.statusCode).toBe(400)
             expect(profiles).toHaveLength(0)
@@ -214,7 +206,7 @@ describe("POST /profiles", () => {
                 .set("Cookie", [cookie])
                 .send(profileData)
 
-            const profiles = await ProfileModel.find()
+            const profiles = await rows(profileTable)
 
             expect(response.statusCode).toBe(400)
             expect(profiles).toHaveLength(0)

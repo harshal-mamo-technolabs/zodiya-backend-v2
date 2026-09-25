@@ -1,7 +1,8 @@
 import { randomBytes } from "crypto"
-import type { Model } from "mongoose"
+import { and, count, desc, asc, eq } from "drizzle-orm"
 import createHttpError from "http-errors"
-import type { Profile, ProfileDocument } from "../models/Profile.ts"
+import type { Db } from "../config/db.ts"
+import { type Profile, profiles } from "../models/Profile.ts"
 import type {
     ChartResponse,
     NatalChart,
@@ -20,7 +21,7 @@ import {
 
 export class ProfileService {
     constructor(
-        private profileModel: Model<Profile>,
+        private db: Db,
         private geoService: GeoService,
         private chartService: ChartService,
         private readingService: ReadingService,
@@ -31,18 +32,27 @@ export class ProfileService {
         const birthTime = data.birthTime ?? DEFAULT_BIRTH_TIME
         const derived = await this.derive({ ...data, birthTime })
 
-        const existingCount = await this.profileModel.countDocuments({
-            user: userId,
-        })
+        const [existing] = await this.db
+            .select({ n: count() })
+            .from(profiles)
+            .where(eq(profiles.user, userId))
 
         try {
-            return await this.profileModel.create({
-                ...data,
-                birthTime,
-                ...derived,
-                user: userId,
-                isPrimary: existingCount === 0,
-            })
+            const [row] = await this.db
+                .insert(profiles)
+                .values({
+                    ...trimmed(data),
+                    birthTime,
+                    ...derived,
+                    user: userId,
+                    isPrimary: existing?.n === 0,
+                })
+                .$returningId()
+            const created = row && (await this.findById(row._id, userId))
+            if (!created) {
+                throw new Error("insert returned no row")
+            }
+            return created
         } catch {
             const error = createHttpError(
                 500,
@@ -88,13 +98,19 @@ export class ProfileService {
     }
 
     async findAllByUser(userId: string) {
-        return await this.profileModel
-            .find({ user: userId })
-            .sort({ isPrimary: -1, createdAt: 1 })
+        return await this.db
+            .select()
+            .from(profiles)
+            .where(eq(profiles.user, userId))
+            .orderBy(desc(profiles.isPrimary), asc(profiles.createdAt))
     }
 
     async findById(id: string, userId: string) {
-        return await this.profileModel.findOne({ _id: id, user: userId })
+        const [profile] = await this.db
+            .select()
+            .from(profiles)
+            .where(and(eq(profiles._id, id), eq(profiles.user, userId)))
+        return profile ?? null
     }
 
     /** The only editable field so far: the name numerology is run against. */
@@ -105,18 +121,21 @@ export class ProfileService {
             return null
         }
 
-        profile.set(patch)
+        const changes = trimmed(patch)
 
         const moved = (
             ["birthDate", "birthTime", "city", "state", "country"] as const
-        ).some((key) => patch[key] !== undefined)
-        if (moved) {
-            profile.set(await this.derive(profile))
-        }
+        ).some((key) => changes[key] !== undefined)
+        const derived = moved
+            ? await this.derive({ ...profile, ...changes })
+            : {}
 
-        await profile.save()
+        await this.db
+            .update(profiles)
+            .set({ ...changes, ...derived })
+            .where(eq(profiles._id, id))
 
-        return profile
+        return await this.findById(id, userId)
     }
 
     /** Creates the public link if there is not one already; idempotent. */
@@ -132,7 +151,7 @@ export class ProfileService {
         if (profile.isPrimary) {
             return "primary"
         }
-        await profile.deleteOne()
+        await this.db.delete(profiles).where(eq(profiles._id, id))
         return "gone"
     }
 
@@ -143,12 +162,17 @@ export class ProfileService {
             return null
         }
 
-        if (!profile.shareToken) {
-            profile.shareToken = randomBytes(16).toString("base64url")
-            await profile.save()
+        if (profile.shareToken) {
+            return profile.shareToken
         }
 
-        return profile.shareToken
+        const shareToken = randomBytes(16).toString("base64url")
+        await this.db
+            .update(profiles)
+            .set({ shareToken })
+            .where(eq(profiles._id, id))
+
+        return shareToken
     }
 
     /** Revokes the public link. The URL stops working immediately. */
@@ -159,8 +183,10 @@ export class ProfileService {
             return false
         }
 
-        profile.set("shareToken", undefined)
-        await profile.save()
+        await this.db
+            .update(profiles)
+            .set({ shareToken: null })
+            .where(eq(profiles._id, id))
 
         return true
     }
@@ -173,7 +199,10 @@ export class ProfileService {
         token: string,
         lang: Language,
     ): Promise<SharedChartResponse | null> {
-        const profile = await this.profileModel.findOne({ shareToken: token })
+        const [profile] = await this.db
+            .select()
+            .from(profiles)
+            .where(eq(profiles.shareToken, token))
 
         if (!profile) {
             return null
@@ -217,7 +246,7 @@ export class ProfileService {
     }
 
     /** The raw natal chart for a profile; transits are read against it. */
-    natal(profile: ProfileDocument): NatalChart {
+    natal(profile: Profile): NatalChart {
         return this.chartService.compute({
             birthDate: profile.birthDate,
             birthTime: profile.birthTime,
@@ -227,12 +256,12 @@ export class ProfileService {
         })
     }
 
-    private assemble(profile: ProfileDocument, lang: Language): ChartResponse {
+    private assemble(profile: Profile, lang: Language): ChartResponse {
         const chart = this.natal(profile)
 
         return {
             profile: {
-                id: String(profile._id),
+                id: profile._id,
                 name: `${profile.firstName} ${profile.lastName}`,
                 birthDate: profile.birthDate,
                 birthTime: profile.birthTime,
@@ -244,4 +273,14 @@ export class ProfileService {
             reading: this.readingService.build(chart, lang),
         }
     }
+}
+
+/** Mongoose trimmed these on write; the columns do not, so the service does. */
+function trimmed<T extends object>(data: T): T {
+    return Object.fromEntries(
+        Object.entries(data).map(([key, value]: [string, unknown]) => [
+            key,
+            typeof value === "string" ? value.trim() : value,
+        ]),
+    ) as T
 }

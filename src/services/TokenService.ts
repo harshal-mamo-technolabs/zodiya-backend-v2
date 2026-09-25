@@ -1,11 +1,12 @@
 import jwt, { type JwtPayload } from "jsonwebtoken"
-import type { Model } from "mongoose"
-import type { RefreshToken } from "../models/RefreshToken.ts"
-import type { UserDocument } from "../models/User.ts"
+import { and, eq, gt } from "drizzle-orm"
+import type { Db } from "../config/db.ts"
+import { refreshTokens } from "../models/RefreshToken.ts"
+import type { User } from "../models/User.ts"
 import { config } from "../config/index.ts"
 
 export class TokenService {
-    constructor(private refreshTokenModel: Model<RefreshToken>) {}
+    constructor(private db: Db) {}
 
     generateAccessToken(payload: JwtPayload): string {
         const accessToken = jwt.sign(payload, config.PRIVATE_KEY, {
@@ -19,27 +20,36 @@ export class TokenService {
 
     async generateRefreshToken(
         payload: JwtPayload,
-        user: UserDocument,
+        user: User,
     ): Promise<string> {
         const MS_IN_YEAR = 1000 * 60 * 60 * 24 * 365
 
-        const newRefreshToken = await this.refreshTokenModel.create({
-            user: user._id,
-            expiresAt: new Date(Date.now() + MS_IN_YEAR),
-        })
+        const [row] = await this.db
+            .insert(refreshTokens)
+            .values({
+                user: user._id,
+                expiresAt: new Date(Date.now() + MS_IN_YEAR),
+            })
+            .$returningId()
+
+        if (!row) {
+            throw new Error("Failed to store the refresh token")
+        }
 
         const refreshToken = jwt.sign(payload, config.REFRESH_TOKEN_SECRET, {
             algorithm: "HS256",
             expiresIn: "1y",
             issuer: "zodiya-backend",
-            jwtid: newRefreshToken._id.toString(),
+            jwtid: row._id,
         })
 
         return refreshToken
     }
 
     async deleteRefreshToken(tokenId: string) {
-        return await this.refreshTokenModel.deleteOne({ _id: tokenId })
+        return await this.db
+            .delete(refreshTokens)
+            .where(eq(refreshTokens._id, tokenId))
     }
 
     /**
@@ -62,12 +72,17 @@ export class TokenService {
         if (!jti || !sub) {
             return null
         }
-        const row = await this.refreshTokenModel.findOneAndDelete({
-            _id: jti,
-            user: sub,
-            expiresAt: { $gt: new Date() },
-        })
-        return row ? sub : null
+        // a single DELETE is atomic, so two racing refreshes cannot both win
+        const [result] = await this.db
+            .delete(refreshTokens)
+            .where(
+                and(
+                    eq(refreshTokens._id, jti),
+                    eq(refreshTokens.user, sub),
+                    gt(refreshTokens.expiresAt, new Date()),
+                ),
+            )
+        return result.affectedRows === 1 ? sub : null
     }
 
     /** Drops the row behind a refresh cookie; an expired or tampered token has nothing to drop. */

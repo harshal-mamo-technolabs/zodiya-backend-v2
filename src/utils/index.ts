@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto"
 import createHttpError from "http-errors"
 import type { AuthRequest } from "../types/index.ts"
 
@@ -89,3 +90,9 @@ export function shiftDate(date: string, byDays: number): string {
         .toISOString()
         .slice(0, 10)
 }
+
+/** A 24-hex id in the ObjectId layout (seconds, then random), so new rows sort like the migrated ones. */
+export const objectId = (): string =>
+    Math.floor(Date.now() / 1000)
+        .toString(16)
+        .padStart(8, "0") + randomBytes(8).toString("hex")

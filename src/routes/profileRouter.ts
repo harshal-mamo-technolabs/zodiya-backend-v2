@@ -4,7 +4,7 @@ import { ProfileService } from "../services/ProfileService.ts"
 import { GeoService } from "../services/GeoService.ts"
 import { ChartService } from "../services/ChartService.ts"
 import { ReadingService } from "../services/ReadingService.ts"
-import { ProfileModel } from "../models/Profile.ts"
+import { db } from "../config/db.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
 import createProfileValidator from "../validators/createProfileValidator.ts"
@@ -26,7 +26,7 @@ const geoService = new GeoService()
 const chartService = new ChartService()
 const readingService = new ReadingService()
 const profileService = new ProfileService(
-    ProfileModel,
+    db,
     geoService,
     chartService,
     readingService,

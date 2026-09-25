@@ -1,8 +1,7 @@
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
+import { resetDB } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
 import { ChartService } from "../../src/services/ChartService.ts"
 import { HoroscopeService } from "../../src/services/HoroscopeService.ts"
 import { HoroscopeReadingService } from "../../src/services/HoroscopeReadingService.ts"
@@ -291,19 +290,15 @@ describe("HoroscopeReadingService", () => {
 })
 
 describe("GET /horoscope", () => {
-    let mongod: MongoMemoryServer
     let cookie: string
 
     beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         cookie = await registerAndGetCookie(app)
     })
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("returns today's reading for a sign", async () => {

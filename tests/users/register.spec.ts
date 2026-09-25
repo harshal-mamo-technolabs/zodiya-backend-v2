@@ -1,28 +1,20 @@
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
-import { UserModel } from "../../src/models/User.ts"
-import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
+import { resetDB, rows } from "../utils/db.ts"
+import { db } from "../../src/config/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
+import { users as userTable } from "../../src/models/User.ts"
+import { refreshTokens as refreshTokenTable } from "../../src/models/RefreshToken.ts"
 import { Roles } from "../../src/constants/index.ts"
 import { isJwt } from "../../src/utils/index.ts"
 
 describe("POST /auth/register", () => {
-    let mongod: MongoMemoryServer
-
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
     })
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     const userData = {
@@ -54,7 +46,7 @@ describe("POST /auth/register", () => {
         it("should register user in the database", async () => {
             await request(app).post("/auth/register").send(userData)
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect(users).toHaveLength(1)
             expect(users[0]?.firstName).toBe(userData.firstName)
@@ -67,17 +59,17 @@ describe("POST /auth/register", () => {
                 .post("/auth/register")
                 .send(userData)
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect((response.body as Record<string, string>).id).toBe(
-                users[0]?._id.toString(),
+                users[0]?._id,
             )
         })
 
         it("should assign a customer role", async () => {
             await request(app).post("/auth/register").send(userData)
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect(users[0]).toHaveProperty("role")
             expect(users[0]?.role).toBe(Roles.CUSTOMER)
@@ -86,20 +78,22 @@ describe("POST /auth/register", () => {
         it("should store the hashed password in the database", async () => {
             await request(app).post("/auth/register").send(userData)
 
-            const users = await UserModel.find().select("+password")
+            const users = await rows(userTable)
 
             expect(users[0]?.password).not.toBe(userData.password)
             expect(users[0]?.password).toHaveLength(60)
         })
 
         it("should return 400 if email already exists", async () => {
-            await UserModel.create({ ...userData, role: Roles.CUSTOMER })
+            await db
+                .insert(userTable)
+                .values({ ...userData, role: Roles.CUSTOMER })
 
             const response = await request(app)
                 .post("/auth/register")
                 .send(userData)
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect(response.statusCode).toBe(400)
             expect(users).toHaveLength(1)
@@ -140,11 +134,11 @@ describe("POST /auth/register", () => {
         it("should store the refresh token in the database", async () => {
             await request(app).post("/auth/register").send(userData)
 
-            const users = await UserModel.find()
-            const tokens = await RefreshTokenModel.find()
+            const users = await rows(userTable)
+            const tokens = await rows(refreshTokenTable)
 
             expect(tokens).toHaveLength(1)
-            expect(tokens[0]?.user.toString()).toBe(users[0]?._id.toString())
+            expect(tokens[0]?.user).toBe(users[0]?._id)
         })
     })
 
@@ -154,7 +148,7 @@ describe("POST /auth/register", () => {
                 .post("/auth/register")
                 .send({ ...userData, email: "" })
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect(response.statusCode).toBe(400)
             expect(users).toHaveLength(0)
@@ -191,7 +185,7 @@ describe("POST /auth/register", () => {
                 .post("/auth/register")
                 .send({ ...userData, email: " harshal@gmail.com " })
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect(users[0]?.email).toBe("harshal@gmail.com")
         })
@@ -201,7 +195,7 @@ describe("POST /auth/register", () => {
                 .post("/auth/register")
                 .send({ ...userData, email: "harshal_gmail.com" })
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect(response.statusCode).toBe(400)
             expect(users).toHaveLength(0)
@@ -212,7 +206,7 @@ describe("POST /auth/register", () => {
                 .post("/auth/register")
                 .send({ ...userData, password: "pass" })
 
-            const users = await UserModel.find()
+            const users = await rows(userTable)
 
             expect(response.statusCode).toBe(400)
             expect(users).toHaveLength(0)

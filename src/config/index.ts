@@ -34,7 +34,7 @@ const PRIVATE_KEY = requirePem("PRIVATE_KEY")
 export const config = {
     PORT: requireEnv("PORT"),
     NODE_ENV: requireEnv("NODE_ENV"),
-    MONGO_URI: requireEnv("MONGO_URI"),
+    DATABASE_URL: requireEnv("DATABASE_URL"),
     REFRESH_TOKEN_SECRET: requireEnv("REFRESH_TOKEN_SECRET"),
     PRIVATE_KEY,
     // derived from the private key so the verifier never drifts from the signer

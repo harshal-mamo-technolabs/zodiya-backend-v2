@@ -154,7 +154,7 @@ export default class ProfileController {
                 return
             }
 
-            this.logger.info("Profile updated", { id: profile.id })
+            this.logger.info("Profile updated", { id: profile._id })
 
             res.status(200).json(profile)
         } catch (e) {

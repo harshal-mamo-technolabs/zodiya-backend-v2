@@ -1,9 +1,8 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
-import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
-import { connectDB, disconnectDB } from "../../src/config/db.ts"
+import { resetDB } from "../utils/db.ts"
+import { disconnectDB } from "../../src/config/db.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import type { ChartResponse } from "../../src/types/index.ts"
 import {
@@ -14,7 +13,6 @@ import {
 } from "../utils/index.ts"
 
 describe("GET /profiles/:id/chart", () => {
-    let mongod: MongoMemoryServer
     let cookie: string
     let profileId: string
 
@@ -28,13 +26,8 @@ describe("GET /profiles/:id/chart", () => {
         return (response.body as Record<string, string>).id ?? ""
     }
 
-    beforeAll(async () => {
-        mongod = await MongoMemoryServer.create()
-        await connectDB(mongod.getUri())
-    })
-
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
         cookie = await registerAndGetCookie(app)
         profileId = await createProfile()
@@ -46,7 +39,6 @@ describe("GET /profiles/:id/chart", () => {
 
     afterAll(async () => {
         await disconnectDB()
-        await mongod.stop()
     })
 
     it("should return the full chart payload", async () => {
