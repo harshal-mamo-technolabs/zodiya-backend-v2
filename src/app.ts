@@ -14,6 +14,7 @@ import numerologyRouter from "./routes/numerologyRouter.ts"
 import tarotRouter from "./routes/tarotRouter.ts"
 import horoscopeRouter from "./routes/horoscopeRouter.ts"
 import statsRouter from "./routes/statsRouter.ts"
+import astrologerRouter from "./routes/astrologerRouter.ts"
 
 const app = express()
 app.use(express.json())
@@ -33,6 +34,7 @@ app.use("/numerology", numerologyRouter)
 app.use("/tarot", tarotRouter)
 app.use("/horoscope", horoscopeRouter)
 app.use("/stats", statsRouter)
+app.use("/astrologer", astrologerRouter)
 
 app.use((err: HttpError, req: Request, res: Response, _next: NextFunction) => {
     logger.error(err.message)

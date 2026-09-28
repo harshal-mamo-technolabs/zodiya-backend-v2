@@ -18,6 +18,7 @@
         "lint:fix": "eslint --fix .",
         "typecheck": "tsc --noEmit",
         "keys:generate": "node scripts/generateKeys.js",
+        "astrologer:setup": "node --import @swc-node/register/esm-register scripts/setupAstrologerAgents.ts",
         "prepare": "husky"
     },
     "lint-staged": {

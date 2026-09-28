@@ -42,4 +42,5 @@ export const config = {
         .export({ type: "spki", format: "pem" })
         .toString(),
     GOOGLE_MAPS_API_KEY: requireEnv("GOOGLE_MAPS_API_KEY"),
+    ELEVENLABS_API_KEY: requireEnv("ELEVENLABS_API_KEY"),
 }

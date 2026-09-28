@@ -38,6 +38,7 @@ jobs:
                   REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
                   PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
                   GOOGLE_MAPS_API_KEY: test-google-key
+                  ELEVENLABS_API_KEY: test-elevenlabs-key
 
             - name: Build-ts
               run: npm run build
