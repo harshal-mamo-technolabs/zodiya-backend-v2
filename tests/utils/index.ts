@@ -1,5 +1,6 @@
 import request from "supertest"
 import type { Express } from "express"
+import { UserModel } from "../../src/models/User.ts"
 
 export const userData = {
     firstName: "harshal",
@@ -25,12 +26,40 @@ export const geoData = {
     timezoneId: "Asia/Kolkata",
 }
 
-// registers the user and returns the `accessToken=...` cookie to send back
+/** What a paying account looks like: a live plan, spare profile slots, minutes. */
+export async function grantPlan(email = userData.email) {
+    await UserModel.updateOne(
+        { email },
+        {
+            $set: {
+                "billing.customerId": `cus_test_${email}`,
+                "billing.plan": {
+                    subscriptionId: "sub_test_plan",
+                    tier: "starter",
+                    status: "active",
+                },
+                "billing.profiles": {
+                    subscriptionId: "sub_test_profiles",
+                    quantity: 10,
+                    status: "active",
+                },
+                "billing.minutes": { allowance: 900, used: 0, topup: 0 },
+            },
+        },
+    )
+}
+
+// registers the user and returns the `accessToken=...` cookie to send back;
+// the account is subscribed unless `subscribed` is false
 export async function registerAndGetCookie(
     app: Express,
     data = userData,
+    subscribed = true,
 ): Promise<string> {
     const response = await request(app).post("/auth/register").send(data)
+    if (subscribed) {
+        await grantPlan(data.email)
+    }
 
     const cookies = (response.headers as unknown as { "set-cookie": string[] })[
         "set-cookie"

@@ -15,6 +15,7 @@ import type { UserDocument } from "../models/User.ts"
 import type { UserService } from "../services/UserService.ts"
 import type { TokenService } from "../services/TokenService.ts"
 import type { CredentialService } from "../services/CredentialService.ts"
+import type { BillingService } from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { config } from "../config/index.ts"
 
@@ -32,6 +33,7 @@ export default class AuthController {
         private tokenService: TokenService,
         private credentialService: CredentialService,
         private logger: Logger,
+        private billing?: BillingService,
     ) {}
 
     async register(
@@ -180,6 +182,8 @@ export default class AuthController {
     async remove(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const id = getAuthUserId(req)
+            // before the account goes, so nothing keeps charging a deleted user
+            await this.billing?.closeCustomer(id)
             const gone = await this.userService.remove(id)
             if (!gone) {
                 next(createHttpError(404, "Account does not exist"))

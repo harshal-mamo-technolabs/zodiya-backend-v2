@@ -27,6 +27,11 @@ export interface VoicePreview {
     words: SpokenWord[]
 }
 
+export interface ConversationSummary {
+    status: "initiated" | "in-progress" | "processing" | "done" | "failed"
+    metadata?: { call_duration_secs?: number }
+}
+
 interface AgentsPage {
     agents: { agent_id: string; name: string }[]
 }
@@ -78,12 +83,41 @@ export class ElevenLabsService {
         return agent
     }
 
-    /** A signed WebSocket URL for one conversation with a private agent; it must be opened within 15 minutes. */
-    async signedUrl(agentId: string): Promise<string> {
+    /**
+     * A signed WebSocket URL for one conversation with a private agent; it
+     * must be opened within 15 minutes. The conversation id is fixed up
+     * front, so the server can look its duration up without the client.
+     */
+    async signedUrl(
+        agentId: string,
+    ): Promise<{ signedUrl: string; conversationId: string }> {
         const { signed_url } = await this.request<{ signed_url: string }>(
-            `/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`,
+            `/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}&include_conversation_id=true`,
         )
-        return signed_url
+        const conversationId = new URL(signed_url).searchParams.get(
+            "conversation_id",
+        )
+        if (!conversationId) {
+            throw createHttpError(
+                502,
+                "ElevenLabs did not return a conversation id",
+            )
+        }
+        return { signedUrl: signed_url, conversationId }
+    }
+
+    /** Where a conversation stands; null until someone has connected to it. */
+    async conversation(id: string): Promise<ConversationSummary | null> {
+        try {
+            return await this.request<ConversationSummary>(
+                `/v1/convai/conversations/${encodeURIComponent(id)}`,
+            )
+        } catch (e) {
+            if ((e as { upstreamStatus?: number }).upstreamStatus === 404) {
+                return null
+            }
+            throw e
+        }
     }
 
     /** The astrologer's sample line in their own voice, with word timings for captions. */
@@ -131,6 +165,7 @@ export class ElevenLabsService {
             throw createHttpError(
                 502,
                 `ElevenLabs request failed (${String(response.status)})`,
+                { upstreamStatus: response.status },
             )
         }
 

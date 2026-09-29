@@ -3,6 +3,7 @@ import PlaceController from "../controllers/PlaceController.ts"
 import { GeoService } from "../services/GeoService.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
+import requirePlan from "../middlewares/requirePlan.ts"
 import {
     placeDetailValidator,
     placeSearchValidator,
@@ -17,6 +18,7 @@ const placeController = new PlaceController(geoService, logger)
 router.get(
     "/",
     authenticate,
+    requirePlan,
     placeSearchValidator,
     placeController.search.bind(placeController),
 )
@@ -24,6 +26,7 @@ router.get(
 router.get(
     "/:placeId",
     authenticate,
+    requirePlan,
     placeDetailValidator,
     placeController.details.bind(placeController),
 )

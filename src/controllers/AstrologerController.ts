@@ -6,6 +6,10 @@ import type { AuthRequest } from "../types/index.ts"
 import type { ProfileService } from "../services/ProfileService.ts"
 import type { ElevenLabsService } from "../services/ElevenLabsService.ts"
 import type { AstrologerContextService } from "../services/AstrologerContextService.ts"
+import {
+    MIN_SESSION_SECONDS,
+    type AstrologerUsageService,
+} from "../services/AstrologerUsageService.ts"
 import { findAstrologer } from "../constants/astrologers.ts"
 import { getAuthUserId } from "../utils/index.ts"
 
@@ -14,6 +18,7 @@ export default class AstrologerController {
         private profileService: ProfileService,
         private elevenLabs: ElevenLabsService,
         private contextService: AstrologerContextService,
+        private usage: AstrologerUsageService,
         private logger: Logger,
     ) {}
 
@@ -72,16 +77,37 @@ export default class AstrologerController {
                 .filter((p) => String(p._id) !== String(profile._id))
                 .map((p) => `${p.firstName} ${p.lastName} (${p.zodiacSign})`)
 
+            const available = await this.usage.available(userId)
+            if (available < MIN_SESSION_SECONDS) {
+                next(
+                    createHttpError(
+                        402,
+                        "You have used all your astrologer minutes.",
+                        { code: "minutes_exhausted" },
+                    ),
+                )
+                return
+            }
+
             const agent = await this.elevenLabs.agentFor(astrologer)
-            const signedUrl = await this.elevenLabs.signedUrl(agent.agentId)
+            const { signedUrl, conversationId } =
+                await this.elevenLabs.signedUrl(agent.agentId)
+            const session = await this.usage.open(
+                userId,
+                conversationId,
+                available,
+            )
 
             this.logger.info("Astrologer session opened", {
                 userId,
                 astrologer: astrologer.id,
+                session: session.id,
             })
 
             res.status(200).json({
                 signedUrl,
+                // the client hangs up once maxSeconds have passed
+                session: { id: session.id, maxSeconds: available },
                 dynamicVariables: {
                     // whoever's profile is active is the person talking
                     user_name: profile.firstName,
@@ -94,6 +120,23 @@ export default class AstrologerController {
                         : "",
                 },
             })
+        } catch (e) {
+            next(e)
+        }
+    }
+
+    /** The conversation is over; charge it as soon as ElevenLabs has timed it. */
+    async end(req: AuthRequest, res: Response, next: NextFunction) {
+        const result = validationResult(req)
+        if (!result.isEmpty()) {
+            res.status(400).json({ errors: result.array() })
+            return
+        }
+
+        try {
+            res.status(200).json(
+                await this.usage.end(getAuthUserId(req), String(req.params.id)),
+            )
         } catch (e) {
             next(e)
         }

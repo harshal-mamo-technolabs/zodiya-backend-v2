@@ -5,8 +5,12 @@ import { GeoService } from "../services/GeoService.ts"
 import { ChartService } from "../services/ChartService.ts"
 import { ReadingService } from "../services/ReadingService.ts"
 import { ProfileModel } from "../models/Profile.ts"
+import { UserModel } from "../models/User.ts"
+import { BillingGrantModel } from "../models/BillingGrant.ts"
+import { BillingService } from "../services/BillingService.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
+import requirePlan, { requireProfileSlot } from "../middlewares/requirePlan.ts"
 import createProfileValidator from "../validators/createProfileValidator.ts"
 import profileIdValidator from "../validators/profileIdValidator.ts"
 import chartValidator from "../validators/chartValidator.ts"
@@ -31,7 +35,11 @@ const profileService = new ProfileService(
     chartService,
     readingService,
 )
-const profileController = new ProfileController(profileService, logger)
+const profileController = new ProfileController(
+    profileService,
+    logger,
+    new BillingService(UserModel, ProfileModel, BillingGrantModel),
+)
 const shareController = new ShareController(profileService, logger)
 const transitService = new TransitService(chartService)
 const synastryController = new SynastryController(
@@ -50,6 +58,8 @@ const transitController = new TransitController(
 router.post(
     "/",
     authenticate,
+    requirePlan,
+    requireProfileSlot,
     createProfileValidator,
     profileController.create.bind(profileController),
 )
@@ -59,6 +69,7 @@ router.get("/", authenticate, profileController.getAll.bind(profileController))
 router.get(
     "/:id",
     authenticate,
+    requirePlan,
     profileIdValidator,
     profileController.getOne.bind(profileController),
 )
@@ -66,6 +77,7 @@ router.get(
 router.patch(
     "/:id",
     authenticate,
+    requirePlan,
     patchProfileValidator,
     profileController.update.bind(profileController),
 )
@@ -73,6 +85,7 @@ router.patch(
 router.delete(
     "/:id",
     authenticate,
+    requirePlan,
     profileIdValidator,
     profileController.remove.bind(profileController),
 )
@@ -80,6 +93,7 @@ router.delete(
 router.get(
     "/:id/chart",
     authenticate,
+    requirePlan,
     chartValidator,
     profileController.getChart.bind(profileController),
 )
@@ -87,6 +101,7 @@ router.get(
 router.get(
     "/:id/transits",
     authenticate,
+    requirePlan,
     chartValidator,
     transitController.read.bind(transitController),
 )
@@ -94,6 +109,7 @@ router.get(
 router.get(
     "/:id/synastry/:otherId",
     authenticate,
+    requirePlan,
     synastryValidator,
     synastryController.read.bind(synastryController),
 )
@@ -101,6 +117,7 @@ router.get(
 router.post(
     "/:id/share",
     authenticate,
+    requirePlan,
     profileIdValidator,
     shareController.create.bind(shareController),
 )
@@ -108,6 +125,7 @@ router.post(
 router.delete(
     "/:id/share",
     authenticate,
+    requirePlan,
     profileIdValidator,
     shareController.revoke.bind(shareController),
 )

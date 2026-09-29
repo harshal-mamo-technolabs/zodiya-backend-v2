@@ -6,6 +6,8 @@ import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { toWords } from "../../src/services/ElevenLabsService.ts"
+import { UserModel } from "../../src/models/User.ts"
+import { AstrologerSessionModel } from "../../src/models/AstrologerSession.ts"
 import {
     geoData,
     profileData,
@@ -33,7 +35,13 @@ function elevenLabs(input: string | URL | Request) {
     }
     if (url.pathname === "/v1/convai/conversation/get-signed-url") {
         return jsonResponse({
-            signed_url: `wss://example.test/convai?${url.searchParams.toString()}`,
+            signed_url: `wss://example.test/convai?${url.searchParams.toString()}&conversation_id=conv_1`,
+        })
+    }
+    if (url.pathname.startsWith("/v1/convai/conversations/")) {
+        return jsonResponse({
+            status: "done",
+            metadata: { call_duration_secs: 125 },
         })
     }
     if (url.pathname.endsWith("/with-timestamps")) {
@@ -51,6 +59,7 @@ function elevenLabs(input: string | URL | Request) {
 
 interface SessionBody {
     signedUrl: string
+    session: { id: string; maxSeconds: number }
     dynamicVariables: Record<string, string>
 }
 
@@ -179,6 +188,53 @@ describe("/astrologer", () => {
             const response = await session({ character: "aries", profileId })
 
             expect(response.statusCode).toBe(502)
+        })
+
+        it("opens a metered session capped at the minutes left", async () => {
+            const response = await session({ character: "virgo", profileId })
+
+            const body = response.body as SessionBody
+            expect(body.session.maxSeconds).toBe(900)
+            const stored = await AstrologerSessionModel.findById(
+                body.session.id,
+            )
+            expect(stored?.conversationId).toBe("conv_1")
+        })
+
+        it("returns 402 minutes_exhausted with no minutes left", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.minutes.used": 900 } },
+            )
+
+            const response = await session({ character: "virgo", profileId })
+
+            expect(response.statusCode).toBe(402)
+            expect(
+                (response.body as { errors: { code?: string }[] }).errors[0]
+                    ?.code,
+            ).toBe("minutes_exhausted")
+        })
+
+        it("charges ElevenLabs' recorded duration when the call ends", async () => {
+            const opened = await session({ character: "virgo", profileId })
+            const { id } = (opened.body as SessionBody).session
+
+            const ended = await request(app)
+                .post(`/astrologer/session/${id}/end`)
+                .set("Cookie", [cookie])
+
+            expect(ended.statusCode).toBe(200)
+            expect(ended.body).toEqual({ settled: true, chargedSeconds: 125 })
+            const user = await UserModel.findOne({ email: userData.email })
+            expect(user?.billing?.minutes?.used).toBe(125)
+
+            // ending twice charges once
+            await request(app)
+                .post(`/astrologer/session/${id}/end`)
+                .set("Cookie", [cookie])
+            const again = await UserModel.findOne({ email: userData.email })
+            expect(again?.billing?.minutes?.used).toBe(125)
         })
 
         it("requires a login", async () => {

@@ -5,6 +5,7 @@ import { HoroscopeReadingService } from "../services/HoroscopeReadingService.ts"
 import { ChartService } from "../services/ChartService.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
+import requirePlan from "../middlewares/requirePlan.ts"
 import horoscopeValidator from "../validators/horoscopeValidator.ts"
 
 const router = express.Router()
@@ -19,6 +20,7 @@ const controller = new HoroscopeController(
 router.get(
     "/",
     authenticate,
+    requirePlan,
     horoscopeValidator,
     controller.read.bind(controller),
 )

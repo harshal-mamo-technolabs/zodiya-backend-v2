@@ -17,10 +17,17 @@ import { ProfileModel } from "../models/Profile.ts"
 import { config } from "../config/index.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
+import requirePlan from "../middlewares/requirePlan.ts"
 import {
     previewValidator,
+    sessionIdValidator,
     sessionValidator,
 } from "../validators/astrologerValidator.ts"
+import { AstrologerUsageService } from "../services/AstrologerUsageService.ts"
+import { BillingService } from "../services/BillingService.ts"
+import { AstrologerSessionModel } from "../models/AstrologerSession.ts"
+import { BillingGrantModel } from "../models/BillingGrant.ts"
+import { UserModel } from "../models/User.ts"
 
 const router = express.Router()
 
@@ -33,9 +40,10 @@ const profileService = new ProfileService(
     readingService,
 )
 const transitService = new TransitService(chartService)
+const elevenLabs = new ElevenLabsService()
 const controller = new AstrologerController(
     profileService,
-    new ElevenLabsService(),
+    elevenLabs,
     new AstrologerContextService(
         profileService,
         readingService,
@@ -45,6 +53,12 @@ const controller = new AstrologerController(
         new HoroscopeReadingService(chartService),
         new NumerologyService(),
         new NumerologyReadingService(),
+    ),
+    new AstrologerUsageService(
+        AstrologerSessionModel,
+        UserModel,
+        elevenLabs,
+        new BillingService(UserModel, ProfileModel, BillingGrantModel),
     ),
     logger,
 )
@@ -66,6 +80,7 @@ const sessions = rateLimit({
 router.get(
     "/characters/:id/preview",
     authenticate,
+    requirePlan,
     previewValidator,
     controller.preview.bind(controller),
 )
@@ -73,9 +88,18 @@ router.get(
 router.post(
     "/session",
     authenticate,
+    requirePlan,
     sessions,
     sessionValidator,
     controller.session.bind(controller),
+)
+
+// no requirePlan: a call that ended as the plan lapsed must still be charged
+router.post(
+    "/session/:id/end",
+    authenticate,
+    sessionIdValidator,
+    controller.end.bind(controller),
 )
 
 export default router

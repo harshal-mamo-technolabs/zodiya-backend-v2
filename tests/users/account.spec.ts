@@ -5,6 +5,7 @@ import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
+import { stripe } from "../../src/services/BillingService.ts"
 import { UserModel } from "../../src/models/User.ts"
 import { ProfileModel } from "../../src/models/Profile.ts"
 import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
@@ -132,11 +133,16 @@ describe("account", () => {
     })
 
     it("DELETE /auth/me removes the account, its profiles and its sessions", async () => {
+        const del = jest
+            .spyOn(stripe.customers, "del")
+            .mockResolvedValue({} as never)
         expect(await RefreshTokenModel.countDocuments()).toBe(1)
         const response = await request(app)
             .delete("/auth/me")
             .set("Cookie", [cookie])
         expect(response.statusCode).toBe(204)
+        // deleting the Stripe customer is what cancels its subscriptions
+        expect(del).toHaveBeenCalledWith("cus_test_harshal@gmail.com")
         const cleared = (
             response.headers as unknown as { "set-cookie": string[] }
         )["set-cookie"].join(" ")

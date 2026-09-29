@@ -15,8 +15,11 @@ import tarotRouter from "./routes/tarotRouter.ts"
 import horoscopeRouter from "./routes/horoscopeRouter.ts"
 import statsRouter from "./routes/statsRouter.ts"
 import astrologerRouter from "./routes/astrologerRouter.ts"
+import billingRouter from "./routes/billingRouter.ts"
 
 const app = express()
+// Stripe signs the exact bytes it sent, so the webhook must see them unparsed
+app.use("/billing/webhook", express.raw({ type: "application/json" }))
 app.use(express.json())
 app.use(cookieParser())
 
@@ -35,8 +38,11 @@ app.use("/tarot", tarotRouter)
 app.use("/horoscope", horoscopeRouter)
 app.use("/stats", statsRouter)
 app.use("/astrologer", astrologerRouter)
+app.use("/billing", billingRouter)
 
 app.use((err: HttpError, req: Request, res: Response, _next: NextFunction) => {
+    // set on errors the client acts on, e.g. plan_required sends it to pricing
+    const { code } = err as HttpError & { code?: unknown }
     logger.error(err.message)
     const statusCode = err.statusCode || err.status || 500
 
@@ -45,6 +51,7 @@ app.use((err: HttpError, req: Request, res: Response, _next: NextFunction) => {
             {
                 type: err.name,
                 msg: err.message,
+                ...(typeof code === "string" && { code }),
                 path: "",
                 location: "",
             },

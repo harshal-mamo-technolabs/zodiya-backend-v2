@@ -19,7 +19,8 @@
         "typecheck": "tsc --noEmit",
         "keys:generate": "node scripts/generateKeys.js",
         "astrologer:setup": "node --import @swc-node/register/esm-register scripts/setupAstrologerAgents.ts",
-        "prepare": "husky"
+        "prepare": "husky",
+        "stripe:setup": "node --import @swc-node/register/esm-register scripts/setupStripe.ts"
     },
     "lint-staged": {
         "*.ts": [
@@ -39,6 +40,7 @@
         "http-errors": "^2.0.1",
         "jsonwebtoken": "^9.0.3",
         "mongoose": "^9.10.0",
+        "stripe": "^22.6.2",
         "tz-lookup": "^6.1.25",
         "winston": "^3.19.0"
     },

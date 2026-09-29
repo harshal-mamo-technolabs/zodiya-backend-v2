@@ -4,6 +4,7 @@ import { NumerologyService } from "../services/NumerologyService.ts"
 import { NumerologyReadingService } from "../services/NumerologyReadingService.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
+import requirePlan from "../middlewares/requirePlan.ts"
 import numerologyValidator from "../validators/numerologyValidator.ts"
 
 const router = express.Router()
@@ -18,6 +19,7 @@ const controller = new NumerologyController(
 router.post(
     "/",
     authenticate,
+    requirePlan,
     numerologyValidator,
     controller.compute.bind(controller),
 )

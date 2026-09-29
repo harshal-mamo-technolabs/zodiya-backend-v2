@@ -30,3 +30,10 @@ export const sessionValidator = checkSchema(
     },
     ["body"],
 )
+
+export const sessionIdValidator = checkSchema({
+    id: {
+        in: ["params"],
+        isMongoId: { errorMessage: "Session id is not valid" },
+    },
+})

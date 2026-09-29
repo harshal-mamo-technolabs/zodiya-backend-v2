@@ -6,6 +6,8 @@ import { CredentialService } from "../services/CredentialService.ts"
 import { UserModel } from "../models/User.ts"
 import { RefreshTokenModel } from "../models/RefreshToken.ts"
 import { ProfileModel } from "../models/Profile.ts"
+import { BillingGrantModel } from "../models/BillingGrant.ts"
+import { BillingService } from "../services/BillingService.ts"
 import authenticate from "../middlewares/authenticate.ts"
 import accountValidator from "../validators/accountValidator.ts"
 import { rateLimit } from "express-rate-limit"
@@ -37,6 +39,7 @@ const authController = new AuthController(
     tokenService,
     credentialService,
     logger,
+    new BillingService(UserModel, ProfileModel, BillingGrantModel),
 )
 
 router.post(

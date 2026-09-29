@@ -39,6 +39,9 @@ jobs:
                   PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
                   GOOGLE_MAPS_API_KEY: test-google-key
                   ELEVENLABS_API_KEY: test-elevenlabs-key
+                  STRIPE_SECRET_KEY: sk_test_dummy
+                  STRIPE_PUBLIC_KEY: pk_test_dummy
+                  STRIPE_WEBHOOK_SECRET: whsec_test_secret
 
             - name: Build-ts
               run: npm run build

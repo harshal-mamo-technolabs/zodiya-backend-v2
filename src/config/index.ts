@@ -43,4 +43,8 @@ export const config = {
         .toString(),
     GOOGLE_MAPS_API_KEY: requireEnv("GOOGLE_MAPS_API_KEY"),
     ELEVENLABS_API_KEY: requireEnv("ELEVENLABS_API_KEY"),
+    STRIPE_SECRET_KEY: requireEnv("STRIPE_SECRET_KEY"),
+    STRIPE_PUBLIC_KEY: requireEnv("STRIPE_PUBLIC_KEY"),
+    // only the webhook needs it, and it exists only once the endpoint is registered
+    STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET ?? "",
 }

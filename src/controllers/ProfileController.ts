@@ -8,6 +8,7 @@ import type {
     ProfilePatch,
 } from "../types/index.ts"
 import type { ProfileService } from "../services/ProfileService.ts"
+import type { BillingService } from "../services/BillingService.ts"
 import { isSupportedLanguage } from "../services/ReadingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { DEFAULT_LANGUAGE, type Language } from "../constants/index.ts"
@@ -30,6 +31,7 @@ export default class ProfileController {
     constructor(
         private profileService: ProfileService,
         private logger: Logger,
+        private billing?: BillingService,
     ) {}
 
     async create(req: CreateProfileRequest, res: Response, next: NextFunction) {
@@ -170,9 +172,10 @@ export default class ProfileController {
         }
 
         try {
+            const userId = getAuthUserId(req)
             const outcome = await this.profileService.remove(
                 String(req.params.id),
-                getAuthUserId(req),
+                userId,
             )
             if (outcome === null) {
                 next(createHttpError(404, "Profile does not exist"))
@@ -188,6 +191,15 @@ export default class ProfileController {
                 return
             }
             this.logger.info("Profile removed", { id: String(req.params.id) })
+            // one paid slot fewer from the next invoice; the profile is gone either way
+            try {
+                await this.billing?.fitProfileSlots(userId)
+            } catch (e) {
+                this.logger.error("Could not reduce profile slots", {
+                    userId,
+                    error: (e as Error).message,
+                })
+            }
             res.status(204).end()
         } catch (e) {
             next(e)
