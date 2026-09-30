@@ -5,6 +5,7 @@ import express, {
 } from "express"
 import cookieParser from "cookie-parser"
 import { type HttpError } from "http-errors"
+import { config } from "./config/index.ts"
 import logger from "./config/logger.ts"
 import authRouter from "./routes/authRouter.ts"
 import profileRouter from "./routes/profileRouter.ts"
@@ -18,6 +19,24 @@ import astrologerRouter from "./routes/astrologerRouter.ts"
 import billingRouter from "./routes/billingRouter.ts"
 
 const app = express()
+app.use((req, res, next) => {
+    const origin = req.headers.origin
+    if (origin && config.CORS_ORIGINS.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin)
+        res.setHeader("Access-Control-Allow-Credentials", "true")
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+        res.setHeader(
+            "Access-Control-Allow-Methods",
+            "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+        )
+        res.setHeader("Vary", "Origin")
+    }
+    if (req.method === "OPTIONS") {
+        res.sendStatus(204)
+        return
+    }
+    next()
+})
 // Stripe signs the exact bytes it sent, so the webhook must see them unparsed
 app.use("/billing/webhook", express.raw({ type: "application/json" }))
 app.use(express.json())

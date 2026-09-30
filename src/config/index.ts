@@ -47,4 +47,9 @@ export const config = {
     STRIPE_PUBLIC_KEY: requireEnv("STRIPE_PUBLIC_KEY"),
     // only the webhook needs it, and it exists only once the endpoint is registered
     STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET ?? "",
+    // browser origins allowed to call the API with cookies, comma-separated
+    CORS_ORIGINS: (process.env.CORS_ORIGINS ?? "")
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean),
 }

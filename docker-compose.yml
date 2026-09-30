@@ -1,0 +1,11 @@
+services:
+  astromeridian-backend:
+    build: .
+    env_file:
+      - .env.production
+    ports:
+      - "5053:5053"
+    restart: always
+    volumes:
+      - ../log:/logs
+ 
