@@ -43,4 +43,9 @@ export const config = {
         .toString(),
     GOOGLE_MAPS_API_KEY: requireEnv("GOOGLE_MAPS_API_KEY"),
     ELEVENLABS_API_KEY: requireEnv("ELEVENLABS_API_KEY"),
+    // browser origins allowed to call the API with cookies, comma-separated
+    CORS_ORIGINS: (process.env.CORS_ORIGINS ?? "")
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean),
 }

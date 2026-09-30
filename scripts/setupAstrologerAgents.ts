@@ -79,7 +79,9 @@ async function workspaceVoices(): Promise<Voice[]> {
 /** The library voice, saved to the workspace under the astrologer's name. */
 async function ensureVoice(a: Astrologer, voices: Voice[]): Promise<string> {
     const name = agentName(a)
-    const existing = voices.find((v) => v.name === name)
+    const existing = voices.find(
+        (v) => v.name === name || v.name === legacyName(a),
+    )
     if (existing) {
         return existing.voice_id
     }
@@ -192,8 +194,11 @@ async function ensureTool(config: { name: string }): Promise<string> {
     return created.id
 }
 
+// ponytail: pre-rename name, so a rerun renames old agents instead of duplicating; drop once all envs are migrated
+const legacyName = (a: Astrologer) => `Zodiya · ${a.name}`
+
 function prompt(a: Astrologer): string {
-    return `You are ${a.name}, a ${a.role.toLowerCase()} and the voice astrologer inside the Zodiya app. ${a.personality}
+    return `You are ${a.name}, a ${a.role.toLowerCase()} and the voice astrologer inside the AstroMeridian app. ${a.personality}
 
 You are talking with {{user_name}}, who is on the "{{page}}" page of the app. Below is everything you know about them: their natal chart and today's readings. Base every answer on it and never invent placements that are not listed.
 
@@ -215,7 +220,7 @@ Rules:
 function agentBody(a: Astrologer, voiceId: string, toolIds: string[]) {
     return {
         name: agentName(a),
-        tags: ["zodiya", "astrologer"],
+        tags: ["astromeridian", "astrologer"],
         conversation_config: {
             agent: {
                 // empty unless the app asks for the introduction, so the agent
@@ -297,12 +302,14 @@ if (process.argv.includes("--voices")) {
     ]
     const { agents } = await api<{
         agents: { agent_id: string; name: string }[]
-    }>("GET", "/v1/convai/agents?search=Zodiya&page_size=100")
+    }>("GET", "/v1/convai/agents?page_size=100")
 
     for (const a of ASTROLOGERS) {
         const voiceId = await ensureVoice(a, voices)
         const body = agentBody(a, voiceId, toolIds)
-        const found = agents.find((x) => x.name === body.name)
+        const found = agents.find(
+            (x) => x.name === body.name || x.name === legacyName(a),
+        )
         if (found) {
             await api("PATCH", `/v1/convai/agents/${found.agent_id}`, body)
             console.log(`updated ${body.name} (${found.agent_id})`)

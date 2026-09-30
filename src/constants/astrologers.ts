@@ -211,7 +211,7 @@ export const findAstrologer = (id: string) =>
     ASTROLOGERS.find((a) => a.id === id)
 
 /** The agent's name on ElevenLabs; the backend finds each agent by it. */
-export const agentName = (a: Astrologer) => `Zodiya · ${a.name}`
+export const agentName = (a: Astrologer) => `AstroMeridian · ${a.name}`
 
 /** Default speaking speed: a little under normal so answers feel unhurried. */
 export const ASTROLOGER_SPEED = 0.9

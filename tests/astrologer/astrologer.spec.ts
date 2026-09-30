@@ -102,7 +102,7 @@ describe("/astrologer", () => {
             expect(response.statusCode).toBe(200)
             const body = response.body as SessionBody
             expect(new URL(body.signedUrl).searchParams.get("agent_id")).toBe(
-                "agent-Zodiya · Dev",
+                "agent-AstroMeridian · Dev",
             )
         })
 
