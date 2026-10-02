@@ -199,6 +199,25 @@ export const DEFAULT_LANGUAGE: Language = SupportedLanguages.EN
 /** Used when a profile has no birth time on file. */
 export const DEFAULT_BIRTH_TIME = "00:00"
 
+/**
+ * Lifetime edits per profile. A save that changes the name or the birth
+ * data uses one, so a slot cannot be recycled to read one stranger after
+ * another. The account owner's own profile gets more room for corrections.
+ */
+export const PROFILE_EDIT_LIMITS = { primary: 3, extra: 1 } as const
+
+/** Changing any of these uses an edit; avatar and relationship are free. */
+export const COUNTED_PROFILE_FIELDS = [
+    "firstName",
+    "lastName",
+    "birthName",
+    "birthDate",
+    "birthTime",
+    "city",
+    "state",
+    "country",
+] as const
+
 /** Bodies that have their own authored line per sign. */
 export const INTERPRETED_BODIES = [
     Bodies.MOON,

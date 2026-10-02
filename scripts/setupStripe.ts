@@ -17,7 +17,7 @@ import {
     CURRENCY,
     PLANS,
     PLAN_TIERS,
-    PROFILE_SLOT,
+    PROFILE_PACKS,
     TRIAL,
 } from "../src/constants/billing.ts"
 
@@ -56,12 +56,12 @@ const WANTED: Wanted[] = [
         product: `AstroMeridian ${String(TRIAL.days)}-day trial`,
         amount: TRIAL.amount,
     },
-    {
-        lookupKey: PROFILE_SLOT.lookupKey,
-        product: "AstroMeridian extra profile",
-        amount: PROFILE_SLOT.amount,
-        recurring: { interval: "month", interval_count: 1 },
-    },
+    ...PROFILE_PACKS.map((p) => ({
+        lookupKey: p.lookupKey,
+        product: `AstroMeridian ${String(p.extra)} extra ${p.extra === 1 ? "profile" : "profiles"}`,
+        amount: p.amount,
+        recurring: { interval: "month" as const, interval_count: 1 },
+    })),
 ]
 
 const existing = await stripe.prices.list({

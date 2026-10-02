@@ -43,10 +43,15 @@ const profileSchema = new Schema(
             required: true,
         },
         isPrimary: { type: Boolean, default: false, required: true },
+        // saves that changed a counted field; capped by PROFILE_EDIT_LIMITS
+        editCount: { type: Number, default: 0, required: true },
+        // hidden from the app and its readings, but it still holds its pack slot
+        disabled: { type: Boolean, default: false, required: true },
         // set only when the owner asks for a public link; unset revokes it
         shareToken: { type: String, index: true, sparse: true, unique: true },
     },
-    { timestamps: true },
+    // two saves racing past the edit limit: the second fails instead of overwriting
+    { timestamps: true, optimisticConcurrency: true },
 )
 
 // mongo enforces a single primary profile per user

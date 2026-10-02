@@ -10,7 +10,7 @@ import { ProfileModel } from "../../src/models/Profile.ts"
 import { BillingGrantModel } from "../../src/models/BillingGrant.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { BillingService, stripe } from "../../src/services/BillingService.ts"
-import { PLANS, TRIAL } from "../../src/constants/billing.ts"
+import { PLANS, PROFILE_PACKS, TRIAL } from "../../src/constants/billing.ts"
 import {
     geoData,
     profileData,
@@ -187,11 +187,163 @@ describe("billing", () => {
             ).toBe("profile_slot_required")
         })
 
-        it("drops a paid slot when a profile is removed", async () => {
+        it("leaves the pack alone when a profile is disabled", async () => {
             const cookie = await registerAndGetCookie(app)
             await UserModel.updateOne(
                 { email: userData.email },
-                { $set: { "billing.profiles.quantity": 2 } },
+                { $set: { "billing.profiles.quantity": 1 } },
+            )
+            for (const firstName of ["a", "b"]) {
+                await request(app)
+                    .post("/profiles")
+                    .set("Cookie", [cookie])
+                    .send({ ...profileData, firstName })
+            }
+            const other = await ProfileModel.findOne({ isPrimary: false })
+            const cancel = jest.spyOn(stripe.subscriptions, "cancel")
+            const update = jest.spyOn(stripe.subscriptions, "update")
+
+            const response = await request(app)
+                .patch(`/profiles/${String(other?._id)}/disabled`)
+                .set("Cookie", [cookie])
+                .send({ disabled: true })
+
+            expect(response.statusCode).toBe(200)
+            expect(cancel).not.toHaveBeenCalled()
+            expect(update).not.toHaveBeenCalled()
+            // the disabled profile still fills the one paid slot
+            const third = await request(app)
+                .post("/profiles")
+                .set("Cookie", [cookie])
+                .send({ ...profileData, firstName: "c" })
+            expect(third.statusCode).toBe(402)
+        })
+    })
+
+    describe("profile packs", () => {
+        const pack = (id: string) => {
+            const found = PROFILE_PACKS.find((p) => p.id === id)
+            if (!found) throw new Error(id)
+            return found
+        }
+        const profileSub = (lookupKey: string) =>
+            subscription({
+                id: "sub_test_profiles",
+                metadata: { kind: "profiles" },
+                items: {
+                    data: [
+                        {
+                            id: "si_1",
+                            quantity: 1,
+                            current_period_end: 1_900_000_000,
+                            price: { lookup_key: lookupKey },
+                        },
+                    ],
+                } as never,
+            })
+        let cookie: string
+
+        beforeEach(async () => {
+            cookie = await registerAndGetCookie(app)
+            jest.spyOn(stripe.prices, "list").mockResolvedValue({
+                data: [
+                    ...Object.values(PLANS).map((p) => p.lookupKey),
+                    TRIAL.lookupKey,
+                    ...PROFILE_PACKS.map((p) => p.lookupKey),
+                ].map((key) => ({ id: `price_${key}`, lookup_key: key })),
+            } as never)
+        })
+
+        const choose = (id: string) =>
+            request(app)
+                .post("/billing/profiles")
+                .set("Cookie", [cookie])
+                .send({ pack: id })
+
+        it("sells 1, 3 or 6 extra profiles at 5, 12 and 24 euro a month", async () => {
+            const catalog = await request(app).get("/billing/catalog")
+            expect(
+                (catalog.body as { profilePacks: unknown }).profilePacks,
+            ).toEqual([
+                { id: "profiles_1", extra: 1, amount: 500 },
+                { id: "profiles_3", extra: 3, amount: 1200 },
+                { id: "profiles_6", extra: 6, amount: 2400 },
+            ])
+        })
+
+        it("starts a pack as one monthly subscription item", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $unset: { "billing.profiles": 1 } },
+            )
+            const create = jest
+                .spyOn(stripe.subscriptions, "create")
+                .mockResolvedValue(
+                    profileSub(pack("profiles_3").lookupKey) as never,
+                )
+
+            const response = await choose("profiles_3")
+
+            expect(response.statusCode).toBe(200)
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    items: [
+                        {
+                            price: `price_${pack("profiles_3").lookupKey}`,
+                            quantity: 1,
+                        },
+                    ],
+                    metadata: expect.objectContaining({
+                        kind: "profiles",
+                    }) as unknown,
+                }),
+            )
+            const status = await request(app)
+                .get("/billing/status")
+                .set("Cookie", [cookie])
+            expect(status.body).toMatchObject({
+                profiles: { extra: 3, pack: "profiles_3", included: 1 },
+            })
+        })
+
+        it("switches pack by swapping the price, pro rata", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.profiles.quantity": 1 } },
+            )
+            jest.spyOn(stripe.subscriptions, "retrieve").mockResolvedValue(
+                profileSub(pack("profiles_1").lookupKey) as never,
+            )
+            const update = jest
+                .spyOn(stripe.subscriptions, "update")
+                .mockResolvedValue(
+                    profileSub(pack("profiles_6").lookupKey) as never,
+                )
+
+            const response = await choose("profiles_6")
+
+            expect(response.statusCode).toBe(200)
+            expect(update).toHaveBeenCalledWith(
+                "sub_test_profiles",
+                expect.objectContaining({
+                    items: [
+                        {
+                            id: "si_1",
+                            price: `price_${pack("profiles_6").lookupKey}`,
+                            quantity: 1,
+                        },
+                    ],
+                    proration_behavior: "always_invoice",
+                }),
+            )
+            const user = await UserModel.findOne({ email: userData.email })
+            expect(user?.billing?.profiles?.quantity).toBe(6)
+        })
+
+        it("refuses a pack smaller than the profiles already saved", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.profiles.quantity": 3 } },
             )
             for (const firstName of ["a", "b", "c"]) {
                 await request(app)
@@ -199,31 +351,21 @@ describe("billing", () => {
                     .set("Cookie", [cookie])
                     .send({ ...profileData, firstName })
             }
-            const other = await ProfileModel.findOne({ isPrimary: false })
-            jest.spyOn(stripe.subscriptions, "retrieve").mockResolvedValue(
-                subscription({
-                    id: "sub_test_profiles",
-                    metadata: { kind: "profiles" },
-                }) as never,
+            const update = jest.spyOn(stripe.subscriptions, "update")
+
+            const response = await choose("profiles_1")
+
+            expect(response.statusCode).toBe(409)
+            expect(update).not.toHaveBeenCalled()
+        })
+
+        it("refuses the pack already held and an unknown pack", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.profiles.quantity": 3 } },
             )
-            const update = jest
-                .spyOn(stripe.subscriptions, "update")
-                .mockResolvedValue(
-                    subscription({
-                        id: "sub_test_profiles",
-                        metadata: { kind: "profiles" },
-                    }) as never,
-                )
-
-            const response = await request(app)
-                .delete(`/profiles/${String(other?._id)}`)
-                .set("Cookie", [cookie])
-
-            expect(response.statusCode).toBe(204)
-            expect(update).toHaveBeenCalledWith("sub_test_profiles", {
-                items: [{ id: "si_1", quantity: 1 }],
-                proration_behavior: "none",
-            })
+            expect((await choose("profiles_3")).statusCode).toBe(409)
+            expect((await choose("profiles_99")).statusCode).toBe(400)
         })
     })
 

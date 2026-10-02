@@ -7,8 +7,7 @@ import type {
     CreateProfileRequest,
     ProfilePatch,
 } from "../types/index.ts"
-import type { ProfileService } from "../services/ProfileService.ts"
-import type { BillingService } from "../services/BillingService.ts"
+import { profileView, type ProfileService } from "../services/ProfileService.ts"
 import { isSupportedLanguage } from "../services/ReadingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { DEFAULT_LANGUAGE, type Language } from "../constants/index.ts"
@@ -31,7 +30,6 @@ export default class ProfileController {
     constructor(
         private profileService: ProfileService,
         private logger: Logger,
-        private billing?: BillingService,
     ) {}
 
     async create(req: CreateProfileRequest, res: Response, next: NextFunction) {
@@ -93,9 +91,13 @@ export default class ProfileController {
     async getAll(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = getAuthUserId(req)
-            const profiles = await this.profileService.findAllByUser(userId)
+            // the account page manages disabled ones too; every other page skips them
+            const profiles = await this.profileService.findAllByUser(
+                userId,
+                req.query.include === "disabled",
+            )
 
-            res.status(200).json(profiles)
+            res.status(200).json(profiles.map(profileView))
         } catch (e) {
             next(e)
         }
@@ -122,7 +124,7 @@ export default class ProfileController {
                 return
             }
 
-            res.status(200).json(profile)
+            res.status(200).json(profileView(profile))
         } catch (e) {
             next(e)
         }
@@ -158,13 +160,13 @@ export default class ProfileController {
 
             this.logger.info("Profile updated", { id: profile.id })
 
-            res.status(200).json(profile)
+            res.status(200).json(profileView(profile))
         } catch (e) {
             next(e)
         }
     }
 
-    async remove(req: AuthRequest, res: Response, next: NextFunction) {
+    async setDisabled(req: AuthRequest, res: Response, next: NextFunction) {
         const result = validationResult(req)
         if (!result.isEmpty()) {
             res.status(400).json({ errors: result.array() })
@@ -173,34 +175,25 @@ export default class ProfileController {
 
         try {
             const userId = getAuthUserId(req)
-            const outcome = await this.profileService.remove(
+            const { disabled } = req.body as { disabled: boolean }
+            const outcome = await this.profileService.setDisabled(
                 String(req.params.id),
                 userId,
+                disabled,
             )
             if (outcome === null) {
                 next(createHttpError(404, "Profile does not exist"))
                 return
             }
             if (outcome === "primary") {
-                next(
-                    createHttpError(
-                        400,
-                        "Your own entry cannot be removed. Delete the account instead.",
-                    ),
-                )
+                next(createHttpError(400, "Your own profile is always on."))
                 return
             }
-            this.logger.info("Profile removed", { id: String(req.params.id) })
-            // one paid slot fewer from the next invoice; the profile is gone either way
-            try {
-                await this.billing?.fitProfileSlots(userId)
-            } catch (e) {
-                this.logger.error("Could not reduce profile slots", {
-                    userId,
-                    error: (e as Error).message,
-                })
-            }
-            res.status(204).end()
+            this.logger.info("Profile switched", {
+                id: String(req.params.id),
+                disabled,
+            })
+            res.status(200).json(profileView(outcome))
         } catch (e) {
             next(e)
         }

@@ -3,7 +3,7 @@ import createHttpError from "http-errors"
 import type { AuthRequest } from "../types/index.ts"
 import { UserModel } from "../models/User.ts"
 import { ProfileModel } from "../models/Profile.ts"
-import { PROFILE_SLOT } from "../constants/billing.ts"
+import { INCLUDED_PROFILES } from "../constants/billing.ts"
 import { isEntitled } from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 
@@ -44,13 +44,13 @@ export async function requireProfileSlot(
     ])
     const slots = user?.billing?.profiles
     const allowed =
-        PROFILE_SLOT.included +
+        INCLUDED_PROFILES +
         (isEntitled(slots?.status) ? (slots?.quantity ?? 0) : 0)
     if (used >= allowed) {
         next(
             createHttpError(
                 402,
-                "Every extra profile needs a profile slot. Add one to continue.",
+                "Every profile slot is in use. Choose a bigger profile pack to add more.",
                 { code: "profile_slot_required" },
             ),
         )

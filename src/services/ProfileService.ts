@@ -14,9 +14,28 @@ import type { ChartService } from "./ChartService.ts"
 import type { ReadingService } from "./ReadingService.ts"
 import {
     Bodies,
+    COUNTED_PROFILE_FIELDS,
     DEFAULT_BIRTH_TIME,
+    PROFILE_EDIT_LIMITS,
     type Language,
 } from "../constants/index.ts"
+
+/** Lifetime edits this profile has left. */
+export const editsLeft = (profile: ProfileDocument) =>
+    Math.max(
+        0,
+        PROFILE_EDIT_LIMITS[profile.isPrimary ? "primary" : "extra"] -
+            profile.editCount,
+    )
+
+/** A profile as the API returns it: the stored fields plus its edits left. */
+export const profileView = (profile: ProfileDocument) => ({
+    ...profile.toJSON(),
+    editsLeft: editsLeft(profile),
+})
+
+// profiles saved before these fields existed have neither set
+const ENABLED = { disabled: { $ne: true } }
 
 export class ProfileService {
     constructor(
@@ -87,22 +106,54 @@ export class ProfileService {
         return { ...geo, zodiacSign: sun.sign }
     }
 
-    async findAllByUser(userId: string) {
+    /** Enabled profiles only, unless the caller manages them (the account page). */
+    async findAllByUser(userId: string, includeDisabled = false) {
         return await this.profileModel
-            .find({ user: userId })
+            .find({ user: userId, ...(!includeDisabled && ENABLED) })
             .sort({ isPrimary: -1, createdAt: 1 })
     }
 
+    /** An enabled profile: every reading, share and comparison goes through here. */
     async findById(id: string, userId: string) {
-        return await this.profileModel.findOne({ _id: id, user: userId })
+        return await this.profileModel.findOne({
+            _id: id,
+            user: userId,
+            ...ENABLED,
+        })
     }
 
-    /** The only editable field so far: the name numerology is run against. */
+    /**
+     * A save that changes the name or birth data uses one of the profile's
+     * lifetime edits; filling in a birth name for the first time does not.
+     */
     async update(id: string, userId: string, patch: ProfilePatch) {
-        const profile = await this.findById(id, userId)
+        const profile = await this.profileModel.findOne({
+            _id: id,
+            user: userId,
+        })
 
         if (!profile) {
             return null
+        }
+        if (profile.disabled) {
+            throw createHttpError(409, "Enable this profile to edit it.", {
+                code: "profile_disabled",
+            })
+        }
+
+        const counted = COUNTED_PROFILE_FIELDS.some((key) => {
+            const next = patch[key]
+            const now = profile[key]
+            return next !== undefined && next !== now && !!now
+        })
+        if (counted && editsLeft(profile) === 0) {
+            const limit =
+                PROFILE_EDIT_LIMITS[profile.isPrimary ? "primary" : "extra"]
+            throw createHttpError(
+                403,
+                `This profile has used all ${String(limit)} of its ${limit === 1 ? "edit" : "edits"}.`,
+                { code: "edit_limit_reached" },
+            )
         }
 
         profile.set(patch)
@@ -113,29 +164,41 @@ export class ProfileService {
         if (moved) {
             profile.set(await this.derive(profile))
         }
+        if (counted) {
+            profile.editCount += 1
+        }
 
         await profile.save()
 
         return profile
     }
 
-    /** Creates the public link if there is not one already; idempotent. */
-    /** Removes a saved person. The primary entry is the account's own chart and stays. */
-    async remove(
+    /**
+     * Profiles are never deleted, or a slot could be reused to read one
+     * stranger after another. They can be switched off and on instead; a
+     * disabled one keeps its slot. The owner's own profile is always on.
+     */
+    async setDisabled(
         id: string,
         userId: string,
-    ): Promise<"gone" | "primary" | null> {
-        const profile = await this.findById(id, userId)
+        disabled: boolean,
+    ): Promise<ProfileDocument | "primary" | null> {
+        const profile = await this.profileModel.findOne({
+            _id: id,
+            user: userId,
+        })
         if (!profile) {
             return null
         }
         if (profile.isPrimary) {
             return "primary"
         }
-        await profile.deleteOne()
-        return "gone"
+        profile.disabled = disabled
+        await profile.save()
+        return profile
     }
 
+    /** Creates the public link if there is not one already; idempotent. */
     async share(id: string, userId: string): Promise<string | null> {
         const profile = await this.findById(id, userId)
 
@@ -173,7 +236,11 @@ export class ProfileService {
         token: string,
         lang: Language,
     ): Promise<SharedChartResponse | null> {
-        const profile = await this.profileModel.findOne({ shareToken: token })
+        // a disabled profile's link stops working until it is enabled again
+        const profile = await this.profileModel.findOne({
+            shareToken: token,
+            ...ENABLED,
+        })
 
         if (!profile) {
             return null

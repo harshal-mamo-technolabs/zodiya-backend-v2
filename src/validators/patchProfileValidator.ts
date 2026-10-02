@@ -1,5 +1,6 @@
 import { checkSchema } from "express-validator"
 import { AVATARS, Relationships } from "../constants/index.ts"
+import { birthDateInRange } from "./createProfileValidator.ts"
 
 export default checkSchema(
     {
@@ -41,7 +42,9 @@ export default checkSchema(
             isDate: {
                 options: { format: "YYYY-MM-DD", strictMode: true },
                 errorMessage: "Birth date should be in YYYY-MM-DD format",
+                bail: true,
             },
+            inRange: birthDateInRange,
         },
         birthTime: {
             in: ["body"],

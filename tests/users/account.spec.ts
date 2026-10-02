@@ -107,28 +107,69 @@ describe("account", () => {
         }
     })
 
-    it("DELETE /profiles/:id removes a saved person but never the primary", async () => {
-        const gone = await request(app)
+    it("never deletes a profile: there is no DELETE /profiles/:id", async () => {
+        const response = await request(app)
             .delete(`/profiles/${other}`)
             .set("Cookie", [cookie])
-        expect(gone.statusCode).toBe(204)
-        expect(await ProfileModel.countDocuments()).toBe(1)
-
-        const kept = await request(app)
-            .delete(`/profiles/${own}`)
-            .set("Cookie", [cookie])
-        expect(kept.statusCode).toBe(400)
-        expect(await ProfileModel.countDocuments()).toBe(1)
+        expect(response.statusCode).toBe(404)
+        expect(await ProfileModel.countDocuments()).toBe(2)
     })
 
-    it("DELETE /profiles/:id hides other people's profiles", async () => {
+    it("PATCH /profiles/:id/disabled hides a saved person but keeps its slot", async () => {
+        const off = await request(app)
+            .patch(`/profiles/${other}/disabled`)
+            .set("Cookie", [cookie])
+            .send({ disabled: true })
+        expect(off.statusCode).toBe(200)
+        expect((off.body as { disabled: boolean }).disabled).toBe(true)
+
+        const visible = await request(app)
+            .get("/profiles")
+            .set("Cookie", [cookie])
+        expect((visible.body as unknown[]).length).toBe(1)
+        const managed = await request(app)
+            .get("/profiles?include=disabled")
+            .set("Cookie", [cookie])
+        expect((managed.body as unknown[]).length).toBe(2)
+        const chart = await request(app)
+            .get(`/profiles/${other}/chart`)
+            .set("Cookie", [cookie])
+        expect(chart.statusCode).toBe(404)
+        const status = await request(app)
+            .get("/billing/status")
+            .set("Cookie", [cookie])
+        expect(
+            (status.body as { profiles: { used: number } }).profiles.used,
+        ).toBe(2)
+
+        const on = await request(app)
+            .patch(`/profiles/${other}/disabled`)
+            .set("Cookie", [cookie])
+            .send({ disabled: false })
+        expect(on.statusCode).toBe(200)
+        const back = await request(app)
+            .get(`/profiles/${other}/chart`)
+            .set("Cookie", [cookie])
+        expect(back.statusCode).toBe(200)
+    })
+
+    it("PATCH /profiles/:id/disabled keeps the owner's own profile on", async () => {
+        const response = await request(app)
+            .patch(`/profiles/${own}/disabled`)
+            .set("Cookie", [cookie])
+            .send({ disabled: true })
+        expect(response.statusCode).toBe(400)
+    })
+
+    it("PATCH /profiles/:id/disabled hides other people's profiles", async () => {
         const otherCookie = await registerAndGetCookie(app, {
             ...userData,
             email: "other@example.com",
         })
         const response = await request(app)
-            .delete(`/profiles/${other}`)
+            .patch(`/profiles/${other}/disabled`)
             .set("Cookie", [otherCookie])
+            .send({ disabled: true })
         expect(response.statusCode).toBe(404)
     })
 
@@ -158,7 +199,11 @@ describe("account", () => {
     it("requires a session", async () => {
         expect((await request(app).get("/auth/me")).statusCode).toBe(401)
         expect(
-            (await request(app).delete(`/profiles/${other}`)).statusCode,
+            (
+                await request(app)
+                    .patch(`/profiles/${other}/disabled`)
+                    .send({ disabled: true })
+            ).statusCode,
         ).toBe(401)
     })
 })

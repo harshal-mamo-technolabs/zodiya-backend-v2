@@ -4,6 +4,7 @@ import {
     MAX_PACK_QUANTITY,
     MINUTE_PACK_IDS,
     PLAN_TIERS,
+    PROFILE_PACK_IDS,
 } from "../constants/billing.ts"
 
 const plan = {
@@ -38,6 +39,18 @@ export const minutesValidator = checkSchema(
                 errorMessage: `Quantity should be 1 to ${String(MAX_PACK_QUANTITY)}`,
             },
             toInt: true,
+        },
+    },
+    ["body"],
+)
+
+export const profilePackValidator = checkSchema(
+    {
+        pack: {
+            isIn: {
+                options: [PROFILE_PACK_IDS],
+                errorMessage: `Pack should be one of: ${PROFILE_PACK_IDS.join(", ")}`,
+            },
         },
     },
     ["body"],

@@ -11,6 +11,7 @@ import {
     changePlanValidator,
     minutesValidator,
     payOpenValidator,
+    profilePackValidator,
     saveCardValidator,
     subscribeValidator,
     syncValidator,
@@ -83,7 +84,8 @@ router.post(
     "/profiles",
     authenticate,
     requirePlan,
-    controller.addProfileSlot.bind(controller),
+    profilePackValidator,
+    controller.chooseProfilePack.bind(controller),
 )
 router.post(
     "/minutes",

@@ -11,7 +11,8 @@ import {
     MINUTE_PACKS,
     PLANS,
     PLAN_TIERS,
-    PROFILE_SLOT,
+    INCLUDED_PROFILES,
+    PROFILE_PACKS,
     TRIAL,
     type BillingKind,
     type PlanTier,
@@ -38,10 +39,12 @@ export default class BillingController {
                 days: TRIAL.days,
                 minutes: TRIAL.minutes,
             },
-            profileSlot: {
-                amount: PROFILE_SLOT.amount,
-                included: PROFILE_SLOT.included,
-            },
+            includedProfiles: INCLUDED_PROFILES,
+            profilePacks: PROFILE_PACKS.map(({ id, extra, amount }) => ({
+                id,
+                extra,
+                amount,
+            })),
             minutePacks: MINUTE_PACKS,
             maxPackQuantity: MAX_PACK_QUANTITY,
         })
@@ -81,10 +84,17 @@ export default class BillingController {
         )
     }
 
-    async addProfileSlot(req: AuthRequest, res: Response, next: NextFunction) {
-        await this.run(req, res, next, (userId) =>
-            this.billing.addProfileSlot(userId),
-        )
+    async chooseProfilePack(
+        req: AuthRequest,
+        res: Response,
+        next: NextFunction,
+    ) {
+        const { pack } = req.body as { pack: string }
+        await this.run(req, res, next, async (userId) => {
+            const step = await this.billing.chooseProfilePack(userId, pack)
+            this.logger.info("Profile pack chosen", { userId, pack })
+            return step
+        })
     }
 
     async buyMinutes(req: AuthRequest, res: Response, next: NextFunction) {

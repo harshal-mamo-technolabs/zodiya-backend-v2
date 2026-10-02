@@ -12,9 +12,11 @@ import {
     MINUTE_PACKS,
     PLANS,
     PLAN_TIERS,
-    PROFILE_SLOT,
+    INCLUDED_PROFILES,
+    PROFILE_PACKS,
     TRIAL,
     planByLookupKey,
+    profilePackByLookupKey,
     type BillingKind,
     type PlanTier,
 } from "../constants/billing.ts"
@@ -60,8 +62,12 @@ export interface BillingStatus {
     profiles: {
         included: number
         extra: number
+        /** The profile pack being paid for, if any. */
+        pack: string | null
         used: number
         status: string | null
+        /** When the pack renews; a switch is prorated against it. */
+        currentPeriodEnd: string | null
     }
     minutes: MinutesLeft
 }
@@ -144,10 +150,13 @@ export class BillingService {
                     : null,
             trialAvailable: !b?.trialUsed,
             profiles: {
-                included: PROFILE_SLOT.included,
+                included: INCLUDED_PROFILES,
                 extra,
+                pack: PROFILE_PACKS.find((p) => p.extra === extra)?.id ?? null,
                 used: await this.profileModel.countDocuments({ user: userId }),
                 status: b?.profiles?.status ?? null,
+                currentPeriodEnd:
+                    b?.profiles?.currentPeriodEnd?.toISOString() ?? null,
             },
             minutes: minutesLeft(b),
         }
@@ -332,24 +341,42 @@ export class BillingService {
         return this.status(userId)
     }
 
-    /** One more profile at PROFILE_SLOT.amount a month, charged pro rata now. */
-    async addProfileSlot(userId: string): Promise<PaymentStep> {
+    /**
+     * Starts a monthly profile pack, or switches to another one. A switch is
+     * charged (or credited) pro rata now and keeps the billing date.
+     */
+    async chooseProfilePack(
+        userId: string,
+        packId: string,
+    ): Promise<PaymentStep> {
+        const pack = PROFILE_PACKS.find((p) => p.id === packId)
+        if (!pack) {
+            throw createHttpError(400, "Unknown profile pack")
+        }
         const user = await this.user(userId)
         if (!isEntitled(user.billing?.plan?.status)) {
             throw createHttpError(402, "An active plan is required.", {
                 code: "plan_required",
             })
         }
-        const { allowed, used } = await this.profileAllowance(userId)
-        if (used < allowed) {
-            throw createHttpError(409, "You already have a free profile slot.")
+        const used = await this.profileModel.countDocuments({ user: userId })
+        const allowed = INCLUDED_PROFILES + pack.extra
+        if (used > allowed) {
+            throw createHttpError(
+                409,
+                `You have ${String(used)} profiles, more than this pack covers. Remove ${String(used - allowed)} first.`,
+            )
         }
 
         const customer = await this.customerFor(user)
+        const prices = await this.priceIds()
         const slots = user.billing?.profiles
-        const description = "One extra profile"
+        const description = `${String(pack.extra)} extra ${pack.extra === 1 ? "profile" : "profiles"}`
 
         if (slots?.subscriptionId && isEntitled(slots.status)) {
+            if (slots.quantity === pack.extra) {
+                throw createHttpError(409, "You already have this pack.")
+            }
             const sub = await stripe.subscriptions.retrieve(
                 slots.subscriptionId,
             )
@@ -358,8 +385,15 @@ export class BillingService {
                 throw createHttpError(500, "The subscription has no item")
             }
             const updated = await stripe.subscriptions.update(sub.id, {
-                items: [{ id: item.id, quantity: (item.quantity ?? 0) + 1 }],
+                items: [
+                    {
+                        id: item.id,
+                        price: prices[pack.lookupKey] ?? "",
+                        quantity: 1,
+                    },
+                ],
                 proration_behavior: "always_invoice",
+                // the switch is only applied once its invoice is paid
                 payment_behavior: "pending_if_incomplete",
                 expand: INVOICE_SECRET,
             })
@@ -367,12 +401,9 @@ export class BillingService {
         }
 
         await this.dropIncomplete(slots)
-        const prices = await this.priceIds()
         const sub = await stripe.subscriptions.create({
             customer,
-            items: [
-                { price: prices[PROFILE_SLOT.lookupKey] ?? "", quantity: 1 },
-            ],
+            items: [{ price: prices[pack.lookupKey] ?? "", quantity: 1 }],
             payment_behavior: "default_incomplete",
             payment_settings: {
                 save_default_payment_method: "on_subscription",
@@ -383,40 +414,6 @@ export class BillingService {
         })
         await this.applySubscription(sub)
         return this.step(sub.latest_invoice, description)
-    }
-
-    /**
-     * After a profile is deleted: fewer paid slots from now on. Nothing is
-     * refunded; the next invoice is simply smaller.
-     */
-    async fitProfileSlots(userId: string) {
-        const user = await this.user(userId)
-        const slots = user.billing?.profiles
-        if (!slots?.subscriptionId || !isEntitled(slots.status)) {
-            return
-        }
-        const count = await this.profileModel.countDocuments({ user: userId })
-        const needed = Math.max(0, count - PROFILE_SLOT.included)
-        if (slots.quantity <= needed) {
-            return
-        }
-        if (needed === 0) {
-            await this.applySubscription(
-                await stripe.subscriptions.cancel(slots.subscriptionId),
-            )
-            return
-        }
-        const sub = await stripe.subscriptions.retrieve(slots.subscriptionId)
-        const item = sub.items.data[0]
-        if (!item) {
-            return
-        }
-        await this.applySubscription(
-            await stripe.subscriptions.update(sub.id, {
-                items: [{ id: item.id, quantity: needed }],
-                proration_behavior: "none",
-            }),
-        )
     }
 
     async buyMinutes(
@@ -693,7 +690,7 @@ export class BillingService {
         const keys = [
             ...PLAN_TIERS.map((t) => PLANS[t].lookupKey),
             TRIAL.lookupKey,
-            PROFILE_SLOT.lookupKey,
+            ...PROFILE_PACKS.map((p) => p.lookupKey),
         ]
         const list = await stripe.prices.list({
             lookup_keys: keys,
@@ -801,7 +798,9 @@ export class BillingService {
                 set["billing.trialUsed"] = true
             }
         } else {
-            set["billing.profiles.quantity"] = item?.quantity ?? 0
+            // the mirror counts extra profiles, which the pack's price decides
+            set["billing.profiles.quantity"] =
+                profilePackByLookupKey(item?.price.lookup_key)?.extra ?? 0
         }
         await this.userModel.updateOne({ _id: user._id }, { $set: set })
 

@@ -5,9 +5,6 @@ import { GeoService } from "../services/GeoService.ts"
 import { ChartService } from "../services/ChartService.ts"
 import { ReadingService } from "../services/ReadingService.ts"
 import { ProfileModel } from "../models/Profile.ts"
-import { UserModel } from "../models/User.ts"
-import { BillingGrantModel } from "../models/BillingGrant.ts"
-import { BillingService } from "../services/BillingService.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
 import requirePlan, { requireProfileSlot } from "../middlewares/requirePlan.ts"
@@ -15,6 +12,7 @@ import createProfileValidator from "../validators/createProfileValidator.ts"
 import profileIdValidator from "../validators/profileIdValidator.ts"
 import chartValidator from "../validators/chartValidator.ts"
 import patchProfileValidator from "../validators/patchProfileValidator.ts"
+import profileStateValidator from "../validators/profileStateValidator.ts"
 import ShareController from "../controllers/ShareController.ts"
 import TransitController from "../controllers/TransitController.ts"
 import { TransitService } from "../services/TransitService.ts"
@@ -35,11 +33,7 @@ const profileService = new ProfileService(
     chartService,
     readingService,
 )
-const profileController = new ProfileController(
-    profileService,
-    logger,
-    new BillingService(UserModel, ProfileModel, BillingGrantModel),
-)
+const profileController = new ProfileController(profileService, logger)
 const shareController = new ShareController(profileService, logger)
 const transitService = new TransitService(chartService)
 const synastryController = new SynastryController(
@@ -82,12 +76,13 @@ router.patch(
     profileController.update.bind(profileController),
 )
 
-router.delete(
-    "/:id",
+// no DELETE: a profile is switched off, never removed (see ProfileService.setDisabled)
+router.patch(
+    "/:id/disabled",
     authenticate,
     requirePlan,
-    profileIdValidator,
-    profileController.remove.bind(profileController),
+    profileStateValidator,
+    profileController.setDisabled.bind(profileController),
 )
 
 router.get(

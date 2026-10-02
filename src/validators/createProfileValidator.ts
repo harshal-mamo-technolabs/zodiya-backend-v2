@@ -1,6 +1,13 @@
 import { checkSchema } from "express-validator"
 import { AVATARS, Relationships } from "../constants/index.ts"
 
+/** A real birth: 1900 or later and not in the future (YYYY-MM-DD compares as text). */
+export const birthDateInRange = {
+    custom: (value: string) =>
+        value >= "1900-01-01" && value <= new Date().toISOString().slice(0, 10),
+    errorMessage: "Birth date should be between 1900 and today",
+}
+
 export default checkSchema({
     firstName: {
         errorMessage: "First name is required!",
@@ -19,7 +26,9 @@ export default checkSchema({
         isDate: {
             options: { format: "YYYY-MM-DD", strictMode: true },
             errorMessage: "Birth date should be in YYYY-MM-DD format",
+            bail: true,
         },
+        inRange: birthDateInRange,
     },
     birthTime: {
         // optional at the edge — ProfileService defaults it to midnight

@@ -113,6 +113,79 @@ describe("PATCH /profiles/:id", () => {
         expect(lookup).not.toHaveBeenCalled()
     })
 
+    it("counts a name or birth-data change as an edit, 3 for the owner", async () => {
+        const edit = (firstName: string) =>
+            request(app)
+                .patch(`/profiles/${profileId}`)
+                .set("Cookie", [cookie])
+                .send({ firstName })
+
+        const first = await edit("Ana")
+        expect((first.body as { editsLeft: number }).editsLeft).toBe(2)
+        await edit("Bea")
+        const third = await edit("Cleo")
+        expect((third.body as { editsLeft: number }).editsLeft).toBe(0)
+
+        const fourth = await edit("Dora")
+        expect(fourth.statusCode).toBe(403)
+        expect(
+            (fourth.body as { errors: { code?: string }[] }).errors[0]?.code,
+        ).toBe("edit_limit_reached")
+
+        // the portrait is not a counted field
+        const avatar = await request(app)
+            .patch(`/profiles/${profileId}`)
+            .set("Cookie", [cookie])
+            .send({ avatar: "avatar-11" })
+        expect(avatar.statusCode).toBe(200)
+    })
+
+    it("does not count a first birth name or a save that changes nothing", async () => {
+        const named = await request(app)
+            .patch(`/profiles/${profileId}`)
+            .set("Cookie", [cookie])
+            .send({ birthName: "Ana Maria Rodrigues" })
+        expect((named.body as { editsLeft: number }).editsLeft).toBe(3)
+
+        const same = await request(app)
+            .patch(`/profiles/${profileId}`)
+            .set("Cookie", [cookie])
+            .send({ firstName: profileData.firstName })
+        expect((same.body as { editsLeft: number }).editsLeft).toBe(3)
+    })
+
+    it("gives an extra profile one edit, and none while it is disabled", async () => {
+        const created = await request(app)
+            .post("/profiles")
+            .set("Cookie", [cookie])
+            .send({
+                ...profileData,
+                firstName: "Tomas",
+                relationship: "friend",
+            })
+        const extra = (created.body as Record<string, string>).id ?? ""
+        const edit = (body: object) =>
+            request(app)
+                .patch(`/profiles/${extra}`)
+                .set("Cookie", [cookie])
+                .send(body)
+
+        await request(app)
+            .patch(`/profiles/${extra}/disabled`)
+            .set("Cookie", [cookie])
+            .send({ disabled: true })
+        expect((await edit({ firstName: "Tom" })).statusCode).toBe(409)
+        await request(app)
+            .patch(`/profiles/${extra}/disabled`)
+            .set("Cookie", [cookie])
+            .send({ disabled: false })
+
+        const once = await edit({ birthDate: "1990-01-01" })
+        expect(once.statusCode).toBe(200)
+        expect((once.body as { editsLeft: number }).editsLeft).toBe(0)
+        expect((await edit({ birthDate: "1991-01-01" })).statusCode).toBe(403)
+    })
+
     it("should reject a malformed birth date", async () => {
         const response = await request(app)
             .patch(`/profiles/${profileId}`)
@@ -120,6 +193,23 @@ describe("PATCH /profiles/:id", () => {
             .send({ birthDate: "12/09/1997" })
 
         expect(response.statusCode).toBe(400)
+    })
+
+    it("should reject a birth date before 1900 or in the future", async () => {
+        const nextYear = String(new Date().getFullYear() + 1)
+        for (const birthDate of ["0341-01-21", `${nextYear}-01-01`]) {
+            const patched = await request(app)
+                .patch(`/profiles/${profileId}`)
+                .set("Cookie", [cookie])
+                .send({ birthDate })
+            expect(patched.statusCode).toBe(400)
+
+            const created = await request(app)
+                .post("/profiles")
+                .set("Cookie", [cookie])
+                .send({ ...profileData, firstName: "Tomas", birthDate })
+            expect(created.statusCode).toBe(400)
+        }
     })
 
     it("should reject an avatar that is not in the set", async () => {

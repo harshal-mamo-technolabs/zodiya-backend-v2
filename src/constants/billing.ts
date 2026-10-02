@@ -63,13 +63,44 @@ export const TRIAL = {
     minutes: 3,
 }
 
-/** Every profile past the account owner's own. */
-export const PROFILE_SLOT = {
-    lookupKey: "zodiya_extra_profile_monthly",
-    amount: 500,
-    /** Profiles every plan includes. */
-    included: 1,
+/** Profiles every plan includes: the account owner's own. */
+export const INCLUDED_PROFILES = 1
+
+export interface ProfilePack {
+    id: string
+    /** Profiles on top of INCLUDED_PROFILES. */
+    extra: number
+    /** Cents a month. */
+    amount: number
+    lookupKey: string
 }
+
+/** Extra profiles come in fixed monthly packs; an account holds one at most. */
+export const PROFILE_PACKS: ProfilePack[] = [
+    {
+        id: "profiles_1",
+        extra: 1,
+        amount: 500,
+        lookupKey: "zodiya_profiles_1_monthly",
+    },
+    {
+        id: "profiles_3",
+        extra: 3,
+        amount: 1200,
+        lookupKey: "zodiya_profiles_3_monthly",
+    },
+    {
+        id: "profiles_6",
+        extra: 6,
+        amount: 2400,
+        lookupKey: "zodiya_profiles_6_monthly",
+    },
+]
+
+export const PROFILE_PACK_IDS = PROFILE_PACKS.map((p) => p.id)
+
+export const profilePackByLookupKey = (key: string | null | undefined) =>
+    PROFILE_PACKS.find((p) => p.lookupKey === key)
 
 export interface MinutePack {
     id: string
