@@ -295,6 +295,9 @@ describe("billing", () => {
                     ],
                     metadata: expect.objectContaining({
                         kind: "profiles",
+                        utm_source: "default",
+                        utm_campaign: "default",
+                        utm_medium: "default",
                     }) as unknown,
                 }),
             )
@@ -506,6 +509,58 @@ describe("billing", () => {
             const user = await UserModel.findOne({ email: userData.email })
             expect(user?.billing?.plan?.status).toBe("canceled")
             expect(user?.billing?.profiles?.status).toBe("canceled")
+        })
+    })
+
+    describe("GET /billing/receipts", () => {
+        it("lists successful payments with their Stripe receipt links", async () => {
+            const cookie = await registerAndGetCookie(app)
+            const list = jest.spyOn(stripe.charges, "list").mockResolvedValue({
+                data: [
+                    {
+                        id: "ch_paid",
+                        created: 1_900_000_000,
+                        amount: 1200,
+                        currency: "eur",
+                        description: "Subscription update",
+                        paid: true,
+                        status: "succeeded",
+                        refunded: false,
+                        receipt_url: "https://pay.stripe.com/receipts/ch_paid",
+                    },
+                    {
+                        id: "ch_failed",
+                        created: 1_900_000_100,
+                        amount: 500,
+                        currency: "eur",
+                        description: null,
+                        paid: false,
+                        status: "failed",
+                        refunded: false,
+                        receipt_url: null,
+                    },
+                ],
+            } as never)
+
+            const response = await request(app)
+                .get("/billing/receipts")
+                .set("Cookie", [cookie])
+
+            expect(response.statusCode).toBe(200)
+            expect(list).toHaveBeenCalledWith(
+                expect.objectContaining({ customer: CUSTOMER }),
+            )
+            expect(response.body).toEqual([
+                {
+                    id: "ch_paid",
+                    created: new Date(1_900_000_000 * 1000).toISOString(),
+                    amount: 1200,
+                    currency: "eur",
+                    description: "Subscription update",
+                    refunded: false,
+                    receiptUrl: "https://pay.stripe.com/receipts/ch_paid",
+                },
+            ])
         })
     })
 

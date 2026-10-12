@@ -189,6 +189,7 @@ export const SIGN_RULER: Record<ZodiacSign, Body> = {
 
 export const SupportedLanguages = {
     EN: "en",
+    DE: "de",
 } as const
 
 export type Language =

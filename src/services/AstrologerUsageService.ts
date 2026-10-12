@@ -1,4 +1,5 @@
 import type { Model, Types } from "mongoose"
+import { config } from "../config/index.ts"
 import createHttpError from "http-errors"
 import type {
     AstrologerSession,
@@ -12,6 +13,8 @@ import { minutesLeft, type BillingService } from "./BillingService.ts"
 const NEVER_CONNECTED_MS = 20 * 60 * 1000
 /** Below this there is not enough left to open a conversation. */
 export const MIN_SESSION_SECONDS = 10
+/** How long one conversation may run while payments are switched off. */
+export const FREE_SESSION_SECONDS = 60 * 60
 
 /**
  * Meters astrologer conversations. ElevenLabs is the clock: a finished
@@ -30,6 +33,10 @@ export class AstrologerUsageService {
 
     /** Seconds the user may talk for right now. */
     async available(userId: string): Promise<number> {
+        // payments off: no minute balance, each session simply runs up to an hour
+        if (!config.PAYMENTS_ENABLED) {
+            return FREE_SESSION_SECONDS
+        }
         await this.settlePending(userId)
         const [user, open] = await Promise.all([
             this.userModel.findById(userId).select("billing.minutes"),

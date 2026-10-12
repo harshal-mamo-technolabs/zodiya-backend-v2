@@ -7,6 +7,7 @@ import {
     type NumerologyValue,
 } from "../constants/index.ts"
 import en from "../data/numerology/en.ts"
+import de from "../data/numerology/de.ts"
 import type {
     NumerologyChapterEntry,
     NumerologyCopy,
@@ -18,10 +19,8 @@ import type {
 /** Add a language by writing src/data/numerology/<lang>.ts and listing it here. */
 const COPY: Record<Language, NumerologyCopy> = {
     [SupportedLanguages.EN]: en,
+    [SupportedLanguages.DE]: de,
 }
-
-/** Four pinnacles, so four ordinals. Translations override via the template. */
-const ORDINALS = ["First", "Second", "Third", "Fourth"]
 
 const fill = (template: string, values: Record<string, string>): string =>
     template.replace(/\{(\w+)\}/g, (match, key: string) => values[key] ?? match)
@@ -129,7 +128,7 @@ export class NumerologyReadingService {
                 ...chapter,
                 challengeAgain: again ? copy.templates.challengeAgain : null,
                 label: fill(copy.templates.chapter, {
-                    ordinal: ORDINALS[index] ?? String(index + 1),
+                    ordinal: copy.ordinals[index] ?? String(index + 1),
                 }),
                 ages: fill(
                     chapter.toAge === null
@@ -161,7 +160,7 @@ export class NumerologyReadingService {
                   masters.length === 1
                       ? copy.templates.masterOne
                       : copy.templates.masterMany,
-                  { labels: this.list(masters) },
+                  { labels: this.list(masters, copy.templates.and) },
               )
             : ""
 
@@ -182,11 +181,11 @@ export class NumerologyReadingService {
     }
 
     /** "Life Path", "Life Path and Destiny", "A, B and C" */
-    private list(items: string[]): string {
+    private list(items: string[], and: string): string {
         if (items.length <= 1) {
             return items[0] ?? ""
         }
-        return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1] ?? ""}`
+        return `${items.slice(0, -1).join(", ")} ${and} ${items[items.length - 1] ?? ""}`
     }
 }
 

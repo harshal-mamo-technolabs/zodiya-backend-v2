@@ -109,6 +109,7 @@ const en: SynastryCopy = {
     ],
     housePlacement:
         "{x}'s {body} falls in {y}'s {ordinal} house, {meaning}. That is the part of {y}'s life {x} touches just by being there, whether or not either of them notices.",
+    contact: "{a}'s {bodyA} {verb} {b}'s {bodyB}",
     houseBasis: "{x} {body} in {y}'s {ordinal} house",
 
     sections: {

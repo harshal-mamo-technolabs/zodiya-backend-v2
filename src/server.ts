@@ -7,6 +7,11 @@ const startServer = async () => {
     try {
         await connectDB()
         logger.info("Database connected successfully")
+        if (!config.OPENAI_API_KEY) {
+            logger.warn(
+                "OPENAI_API_KEY is not set: palm reading answers 503 until it is",
+            )
+        }
 
         app.listen(config.PORT, () => {
             logger.info(

@@ -537,6 +537,11 @@ const en: HoroscopeCopy = {
         [Bodies.NORTH_NODE]: "North Node",
     },
 
+    lights: {
+        [Bodies.SUN]: "the Sun",
+        [Bodies.MOON]: "the Moon",
+    },
+
     aspects: {
         [AspectTypes.CONJUNCTION]: "conjunct",
         [AspectTypes.SEXTILE]: "sextile",
@@ -754,6 +759,7 @@ const en: HoroscopeCopy = {
         ingress: "{planet} enters {sign} · {date}",
         moonRun: "Moon through {signs}",
         house: "{planet} in {sign} · your {ordinal} house",
+        today: "today",
     },
 }
 

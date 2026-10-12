@@ -6,7 +6,7 @@ import { ProfileModel } from "../models/Profile.ts"
 import { BillingGrantModel } from "../models/BillingGrant.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
-import requirePlan from "../middlewares/requirePlan.ts"
+import requirePlan, { requirePayments } from "../middlewares/requirePlan.ts"
 import {
     changePlanValidator,
     minutesValidator,
@@ -42,28 +42,37 @@ router.post(
 router.post(
     "/subscribe",
     authenticate,
+    requirePayments,
     subscribeValidator,
     controller.subscribe.bind(controller),
 )
 router.post(
     "/pay-open",
     authenticate,
+    requirePayments,
     payOpenValidator,
     controller.payOpen.bind(controller),
 )
 router.get("/card", authenticate, controller.card.bind(controller))
-router.post("/card", authenticate, controller.cardSetup.bind(controller))
+router.post(
+    "/card",
+    authenticate,
+    requirePayments,
+    controller.cardSetup.bind(controller),
+)
 router.put(
     "/card",
     authenticate,
+    requirePayments,
     saveCardValidator,
     controller.saveCard.bind(controller),
 )
-router.get("/invoices", authenticate, controller.invoices.bind(controller))
+router.get("/receipts", authenticate, controller.receipts.bind(controller))
 
 router.post(
     "/plan/change",
     authenticate,
+    requirePayments,
     requirePlan,
     changePlanValidator,
     controller.changePlan.bind(controller),
@@ -71,18 +80,21 @@ router.post(
 router.post(
     "/plan/cancel",
     authenticate,
+    requirePayments,
     requirePlan,
     controller.cancel.bind(controller),
 )
 router.post(
     "/plan/resume",
     authenticate,
+    requirePayments,
     requirePlan,
     controller.resume.bind(controller),
 )
 router.post(
     "/profiles",
     authenticate,
+    requirePayments,
     requirePlan,
     profilePackValidator,
     controller.chooseProfilePack.bind(controller),
@@ -90,6 +102,7 @@ router.post(
 router.post(
     "/minutes",
     authenticate,
+    requirePayments,
     requirePlan,
     minutesValidator,
     controller.buyMinutes.bind(controller),

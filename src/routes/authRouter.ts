@@ -1,6 +1,8 @@
 import express from "express"
 import AuthController from "../controllers/AuthController.ts"
 import { UserService } from "../services/UserService.ts"
+import { StorageService } from "../services/StorageService.ts"
+import { PalmReadingModel } from "../models/PalmReading.ts"
 import { TokenService } from "../services/TokenService.ts"
 import { CredentialService } from "../services/CredentialService.ts"
 import { UserModel } from "../models/User.ts"
@@ -31,7 +33,13 @@ const credentials = rateLimit({
     },
 })
 
-const userService = new UserService(UserModel, ProfileModel, RefreshTokenModel)
+const userService = new UserService(
+    UserModel,
+    ProfileModel,
+    RefreshTokenModel,
+    PalmReadingModel,
+    new StorageService(),
+)
 const tokenService = new TokenService(RefreshTokenModel)
 const credentialService = new CredentialService()
 const authController = new AuthController(
@@ -57,6 +65,13 @@ router.post(
 )
 
 router.post("/refresh", authController.refresh.bind(authController))
+
+// the onboarding funnel's one-time sign-in; limited like the other credentials
+router.post(
+    "/handoff",
+    credentials,
+    authController.handoff.bind(authController),
+)
 
 router.post("/logout", authController.logout.bind(authController))
 

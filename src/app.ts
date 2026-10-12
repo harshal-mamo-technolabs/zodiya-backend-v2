@@ -16,7 +16,10 @@ import tarotRouter from "./routes/tarotRouter.ts"
 import horoscopeRouter from "./routes/horoscopeRouter.ts"
 import statsRouter from "./routes/statsRouter.ts"
 import astrologerRouter from "./routes/astrologerRouter.ts"
+import helpscoutRouter from "./routes/helpscoutRouter.ts"
+import funnelRouter from "./routes/funnelRouter.ts"
 import billingRouter from "./routes/billingRouter.ts"
+import palmRouter from "./routes/palmRouter.ts"
 
 const app = express()
 app.use((req, res, next) => {
@@ -24,7 +27,10 @@ app.use((req, res, next) => {
     if (origin && config.CORS_ORIGINS.includes(origin)) {
         res.setHeader("Access-Control-Allow-Origin", origin)
         res.setHeader("Access-Control-Allow-Credentials", "true")
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+        res.setHeader(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization",
+        )
         res.setHeader(
             "Access-Control-Allow-Methods",
             "GET,POST,PUT,PATCH,DELETE,OPTIONS",
@@ -58,6 +64,9 @@ app.use("/horoscope", horoscopeRouter)
 app.use("/stats", statsRouter)
 app.use("/astrologer", astrologerRouter)
 app.use("/billing", billingRouter)
+app.use("/helpscout", helpscoutRouter)
+app.use("/funnel", funnelRouter)
+app.use("/palm", palmRouter)
 
 app.use((err: HttpError, req: Request, res: Response, _next: NextFunction) => {
     // set on errors the client acts on, e.g. plan_required sends it to pricing

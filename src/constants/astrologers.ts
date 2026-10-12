@@ -213,6 +213,29 @@ export const findAstrologer = (id: string) =>
 /** The agent's name on ElevenLabs; the backend finds each agent by it. */
 export const agentName = (a: Astrologer) => `AstroMeridian · ${a.name}`
 
+/** The preview line in German, spoken by the multilingual model. */
+export const GERMAN_SAMPLES: Record<ZodiacSign, string> = {
+    aries: "Verschwenden wir kein einziges Grad. Frag mich, wozu dein Mars dich drängt.",
+    taurus: "Ganz in Ruhe. Dein Horoskop ist ein Garten. Schauen wir, was bereit ist zu wachsen.",
+    gemini: "Jede Stellung hat eine Zwillingsdeutung. Willst du die kurze Version oder die raffinierte?",
+    cancer: "Dein Mond erinnert sich an alles. Ich sage dir, was er von dir braucht.",
+    leo: "Jedes Horoskop hat ein Rampenlicht. Ich zeige dir, wo deines leuchtet.",
+    virgo: "Details zählen. Gehen wir deine Häuser sorgfältig eines nach dem anderen durch.",
+    libra: "Balance ist die ganze Kunst. Sollen wir uns die Menschen in deinem Horoskop ansehen?",
+    scorpio:
+        "Schauen wir unter die Oberfläche. Dein achtes Haus hat etwas zu sagen.",
+    sagittarius:
+        "Wohin führt dich Jupiter als Nächstes? Zielen wir auf etwas Wunderbares.",
+    capricorn:
+        "Saturn ist ein geduldiger Lehrer. Ich zeige dir, was er in dir aufbaut.",
+    aquarius:
+        "Dein Horoskop ist ein Muster, das verstanden werden will. Sollen wir es gemeinsam kartieren?",
+    pisces: "Schließ kurz die Augen. Dein Neptun hat eine Geschichte über dich.",
+}
+
+/** English agents speak with Turbo v2; any other language needs the v2.5 model. */
+export const MULTILINGUAL_MODEL = "eleven_turbo_v2_5"
+
 /** Default speaking speed: a little under normal so answers feel unhurried. */
 export const ASTROLOGER_SPEED = 0.9
 
@@ -235,4 +258,6 @@ export const READING_PAGES = [
     "numerology",
     "synastry",
     "tarot",
+    "astrocartography",
+    "palm",
 ] as const

@@ -13,6 +13,7 @@ import {
     type TransitTone,
 } from "../constants/index.ts"
 import en from "../data/transits/en.ts"
+import de from "../data/transits/de.ts"
 import type {
     NatalChart,
     TransitCopy,
@@ -26,6 +27,7 @@ import type { TransitService } from "./TransitService.ts"
 /** Add a language by writing src/data/transits/<lang>.ts and listing it here. */
 const COPY: Record<Language, TransitCopy> = {
     [SupportedLanguages.EN]: en,
+    [SupportedLanguages.DE]: de,
 }
 
 const LUNATION_KINDS: readonly string[] = Object.values(Lunations)
@@ -89,19 +91,23 @@ export class TransitReadingService {
             lunation: event.lunation,
             transitName,
             natalName: copy.points[event.natal],
-            natalPos: this.position(event.natalLon),
+            natalPos: this.position(event.natalLon, copy),
             aspectName: aspect.name,
             glyph: aspect.glyph,
             tone,
             toneLabel: copy.tones[tone],
-            title: `${transitName} ${aspect.name.toLowerCase()} ${copy.points[event.natal]}`,
+            title: copy.title
+                .replace("{transit}", transitName)
+                .replace("{aspectLower}", aspect.name.toLowerCase())
+                .replace("{aspect}", aspect.name)
+                .replace("{natal}", copy.points[event.natal]),
             lede,
             text: `${body} ${copy.natal[event.natal]}`,
             advice,
             daily: event.daily.map((day) => ({
                 orb: day.orb,
                 pos:
-                    this.position(day.lon) +
+                    this.position(day.lon, copy) +
                     (day.speed < 0 && !lunation ? " ℞" : ""),
                 motion: this.motion(event, day.speed, copy),
             })),
@@ -139,9 +145,8 @@ export class TransitReadingService {
     }
 
     /** "Virgo 19°42′" */
-    private position(lon: number): string {
+    private position(lon: number, copy: TransitCopy): string {
         const { sign, degree, minute } = this.chartService.signPosition(lon)
-        const name = sign.charAt(0).toUpperCase() + sign.slice(1)
-        return `${name} ${String(degree).padStart(2, "0")}°${String(minute).padStart(2, "0")}′`
+        return `${copy.signs[sign]} ${String(degree).padStart(2, "0")}°${String(minute).padStart(2, "0")}′`
     }
 }

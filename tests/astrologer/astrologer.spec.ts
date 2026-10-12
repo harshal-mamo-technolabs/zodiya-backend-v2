@@ -8,6 +8,7 @@ import { GeoService } from "../../src/services/GeoService.ts"
 import { toWords } from "../../src/services/ElevenLabsService.ts"
 import { UserModel } from "../../src/models/User.ts"
 import { AstrologerSessionModel } from "../../src/models/AstrologerSession.ts"
+import { PalmReadingModel } from "../../src/models/PalmReading.ts"
 import {
     geoData,
     profileData,
@@ -147,6 +148,68 @@ describe("/astrologer", () => {
             expect(vars.chart_context).toContain("Life Path")
         })
 
+        it("tells the agent about astrocartography and palm readings", async () => {
+            const vars = (
+                (await session({ character: "libra", profileId }))
+                    .body as SessionBody
+            ).dynamicVariables
+            expect(vars.chart_context).toContain("Astrocartography")
+            expect(vars.chart_context).toContain("Best listed city for love")
+            expect(vars.chart_context).toContain(
+                "Palm readings: none saved for this person yet.",
+            )
+        })
+
+        it("passes the person's saved palm reading to the agent", async () => {
+            const user = await UserModel.findOne({}).orFail()
+            const line = (key: string, name: string) => ({
+                key,
+                name,
+                visibility: "clear",
+                observation: "Long.",
+                quality: "deep and long",
+                strength: 70,
+                confidence: "high",
+                interpretation: `${name} meaning.`,
+            })
+            await PalmReadingModel.create({
+                user: user._id,
+                subject: {
+                    kind: "profile",
+                    profile: profileId,
+                    name: "A",
+                    gender: null,
+                    age: null,
+                },
+                hand: "right",
+                dominant: true,
+                lang: "en",
+                model: "test",
+                report: {
+                    title: "A steady and curious palm",
+                    summary: "You think before you act.",
+                    hand: { type: "Square palm", element: "Air" },
+                    lines: [
+                        line("heart", "Heart line"),
+                        line("head", "Head line"),
+                        line("life", "Life line"),
+                        line("fate", "Fate line"),
+                    ],
+                    advice: "Trust your judgement.",
+                },
+                images: { original: "k", highlighted: null },
+                highlight: { state: "none", model: null },
+            })
+
+            const vars = (
+                (await session({ character: "libra", profileId }))
+                    .body as SessionBody
+            ).dynamicVariables
+            expect(vars.chart_context).toContain('"A steady and curious palm"')
+            expect(vars.chart_context).toContain("Heart line: clear")
+            expect(vars.chart_context).toContain("Trust your judgement.")
+        })
+
         it("adds the spoken introduction only when asked", async () => {
             const response = await session({
                 character: "pisces",
@@ -157,6 +220,30 @@ describe("/astrologer", () => {
             expect(
                 (response.body as SessionBody).dynamicVariables.greeting,
             ).toContain("I'm Marina")
+        })
+
+        it("speaks German when the portal is in German", async () => {
+            const response = await session({
+                character: "pisces",
+                profileId,
+                greet: true,
+                lang: "de",
+            })
+
+            const vars = (response.body as SessionBody).dynamicVariables
+            expect(vars.language).toBe("German")
+            expect(vars.greeting).toContain("ich bin Marina, deine Astrologin")
+            expect(vars.chart_context).toContain("Sonne in Löwe")
+        })
+
+        it("rejects an unknown language", async () => {
+            const response = await session({
+                character: "virgo",
+                profileId,
+                lang: "xx",
+            })
+
+            expect(response.statusCode).toBe(400)
         })
 
         it("rejects an unknown astrologer", async () => {

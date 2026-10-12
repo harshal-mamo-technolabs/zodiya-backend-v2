@@ -7,6 +7,8 @@ import {
 import { Roles } from "../constants/index.ts"
 import { PLAN_TIERS } from "../constants/billing.ts"
 
+export const GENDERS = ["female", "male"] as const
+
 const userSchema = new Schema(
     {
         firstName: { type: String, required: true, trim: true },
@@ -19,6 +21,13 @@ const userSchema = new Schema(
             trim: true,
         },
         password: { type: String, required: true, select: false },
+        // optional; only the onboarding funnel asks for it
+        gender: { type: String, enum: GENDERS },
+        // the campaign that brought them, as the funnel's landing URL said;
+        // also sent to Stripe and Help Scout
+        utm_source: { type: String, default: "default" },
+        utm_campaign: { type: String, default: "default" },
+        utm_medium: { type: String, default: "default" },
         role: {
             type: String,
             enum: Object.values(Roles),

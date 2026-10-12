@@ -4,6 +4,8 @@ import bcrypt from "bcrypt"
 import type { User } from "../models/User.ts"
 import type { Profile } from "../models/Profile.ts"
 import type { RefreshToken } from "../models/RefreshToken.ts"
+import type { PalmReading } from "../models/PalmReading.ts"
+import { palmPrefix, type StorageService } from "./StorageService.ts"
 import type { AccountPatch } from "../types/index.ts"
 import { type Role, Roles } from "../constants/index.ts"
 
@@ -12,6 +14,8 @@ export class UserService {
         private userModel: Model<User>,
         private profileModel?: Model<Profile>,
         private refreshTokenModel?: Model<RefreshToken>,
+        private palmReadingModel?: Model<PalmReading>,
+        private storage?: StorageService,
     ) {}
 
     async create(
@@ -76,6 +80,13 @@ export class UserService {
     async remove(id: string) {
         await this.profileModel?.deleteMany({ user: id })
         await this.refreshTokenModel?.deleteMany({ user: id })
+        await this.palmReadingModel?.deleteMany({ user: id })
+        if (this.storage?.configured) {
+            // StorageService logs the failure; it must not keep the account alive
+            await this.storage
+                .removePrefix(palmPrefix(id))
+                .catch(() => undefined)
+        }
         const result = await this.userModel.deleteOne({ _id: id })
         return result.deletedCount === 1
     }

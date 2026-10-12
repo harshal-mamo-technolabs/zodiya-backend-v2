@@ -49,6 +49,8 @@ export interface MinutesLeft {
 }
 
 export interface BillingStatus {
+    /** False when PAYMENTS_ENABLED=false: everything is free and nothing is sold. */
+    paymentsEnabled: boolean
     entitled: boolean
     plan: {
         tier: PlanTier
@@ -80,16 +82,16 @@ export interface SavedCard {
     expYear: number
 }
 
-export interface InvoiceRow {
+/** One payment the user made, with Stripe's own receipt page for it. */
+export interface ReceiptRow {
     id: string
-    number: string | null
     created: string
-    total: number
+    /** Cents charged. */
+    amount: number
     currency: string
-    status: string | null
     description: string
-    hostedUrl: string | null
-    pdfUrl: string | null
+    refunded: boolean
+    receiptUrl: string | null
 }
 
 type Billing = NonNullable<User["billing"]>
@@ -101,6 +103,13 @@ const idOf = (ref: string | { id: string } | null | undefined) =>
 const same = (value: number) => (value === 0 ? { $in: [0, null] } : value)
 
 const INVOICE_SECRET = ["latest_invoice.confirmation_secret"]
+
+// the campaign that brought the customer, on everything they buy in Stripe
+const utm = (user: UserDocument) => ({
+    utm_source: user.utm_source || "default",
+    utm_campaign: user.utm_campaign || "default",
+    utm_medium: user.utm_medium || "default",
+})
 
 export function minutesLeft(billing: Billing | null | undefined): MinutesLeft {
     const m = billing?.minutes
@@ -135,7 +144,8 @@ export class BillingService {
             ? (b?.profiles?.quantity ?? 0)
             : 0
         return {
-            entitled: isEntitled(plan?.status),
+            paymentsEnabled: config.PAYMENTS_ENABLED,
+            entitled: !config.PAYMENTS_ENABLED || isEntitled(plan?.status),
             plan:
                 tier && plan?.status
                     ? {
@@ -203,28 +213,29 @@ export class BillingService {
         }
     }
 
-    async invoices(userId: string): Promise<InvoiceRow[]> {
+    /**
+     * Every successful card payment (plans, profile packs and minute top-ups
+     * alike), each with the receipt page Stripe hosts for it.
+     */
+    async receipts(userId: string): Promise<ReceiptRow[]> {
         const customerId = (await this.user(userId)).billing?.customerId
         if (!customerId) {
             return []
         }
-        const list = await stripe.invoices.list({
+        const list = await stripe.charges.list({
             customer: customerId,
             limit: 24,
         })
         return list.data
-            .filter((i) => i.status !== "draft")
-            .map((i) => ({
-                id: i.id,
-                number: i.number,
-                created: new Date(i.created * 1000).toISOString(),
-                total: i.total,
-                currency: i.currency,
-                status: i.status,
-                description:
-                    i.lines.data[0]?.description ?? i.description ?? "",
-                hostedUrl: i.hosted_invoice_url ?? null,
-                pdfUrl: i.invoice_pdf ?? null,
+            .filter((c) => c.paid && c.status === "succeeded")
+            .map((c) => ({
+                id: c.id,
+                created: new Date(c.created * 1000).toISOString(),
+                amount: c.amount,
+                currency: c.currency,
+                description: c.description ?? "Payment",
+                refunded: c.refunded,
+                receiptUrl: c.receipt_url ?? null,
             }))
     }
 
@@ -263,7 +274,7 @@ export class BillingService {
                 save_default_payment_method: "on_subscription",
                 payment_method_types: ["card"],
             },
-            metadata: { userId, kind: BillingKinds.PLAN },
+            metadata: { userId, kind: BillingKinds.PLAN, ...utm(user) },
             expand: INVOICE_SECRET,
             ...(trial && {
                 trial_period_days: TRIAL.days,
@@ -409,7 +420,7 @@ export class BillingService {
                 save_default_payment_method: "on_subscription",
                 payment_method_types: ["card"],
             },
-            metadata: { userId, kind: BillingKinds.PROFILES },
+            metadata: { userId, kind: BillingKinds.PROFILES, ...utm(user) },
             expand: INVOICE_SECRET,
         })
         await this.applySubscription(sub)
@@ -440,6 +451,7 @@ export class BillingService {
                 userId,
                 kind: BillingKinds.MINUTES,
                 minutes: String(minutes),
+                ...utm(user),
             },
         })
         return {
@@ -615,6 +627,10 @@ export class BillingService {
 
     /** Spends plan minutes first, then top-ups; never below zero. */
     async debit(userId: string | Types.ObjectId, seconds: number) {
+        // payments off: talking is free, there is no balance to draw down
+        if (!config.PAYMENTS_ENABLED) {
+            return
+        }
         for (let attempt = 0; attempt < 8; attempt++) {
             const user = await this.userModel
                 .findById(userId)
@@ -671,7 +687,7 @@ export class BillingService {
             {
                 email: user.email,
                 name: `${user.firstName} ${user.lastName}`,
-                metadata: { userId: user.id },
+                metadata: { userId: user.id, ...utm(user) },
             },
             // two tabs checking out at once still make one customer
             { idempotencyKey: `customer-${user.id}` },

@@ -27,6 +27,7 @@ export default class BillingController {
     /** Public: the pricing page reads prices from here, not from the bundle. */
     catalog(_req: Request, res: Response) {
         res.status(200).json({
+            paymentsEnabled: config.PAYMENTS_ENABLED,
             publishableKey: config.STRIPE_PUBLIC_KEY,
             currency: CURRENCY,
             plans: PLAN_TIERS.map((t) => {
@@ -133,9 +134,9 @@ export default class BillingController {
         }))
     }
 
-    async invoices(req: AuthRequest, res: Response, next: NextFunction) {
+    async receipts(req: AuthRequest, res: Response, next: NextFunction) {
         await this.run(req, res, next, (userId) =>
-            this.billing.invoices(userId),
+            this.billing.receipts(userId),
         )
     }
 

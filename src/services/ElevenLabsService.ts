@@ -1,8 +1,11 @@
 import createHttpError from "http-errors"
 import { config } from "../config/index.ts"
+import type { Language } from "../constants/index.ts"
 import {
     ASTROLOGER_SPEED,
     ASTROLOGER_TTS,
+    GERMAN_SAMPLES,
+    MULTILINGUAL_MODEL,
     agentName,
     type Astrologer,
 } from "../constants/astrologers.ts"
@@ -121,8 +124,12 @@ export class ElevenLabsService {
     }
 
     /** The astrologer's sample line in their own voice, with word timings for captions. */
-    async preview(astrologer: Astrologer): Promise<VoicePreview> {
-        const cached = this.previews.get(astrologer.id)
+    async preview(
+        astrologer: Astrologer,
+        lang: Language = "en",
+    ): Promise<VoicePreview> {
+        const key = `${astrologer.id}:${lang}`
+        const cached = this.previews.get(key)
         if (cached) {
             return cached
         }
@@ -134,8 +141,14 @@ export class ElevenLabsService {
         }>(`/v1/text-to-speech/${voiceId}/with-timestamps`, {
             method: "POST",
             body: JSON.stringify({
-                text: astrologer.sample,
-                model_id: ASTROLOGER_TTS.model_id,
+                text:
+                    lang === "de"
+                        ? GERMAN_SAMPLES[astrologer.id]
+                        : astrologer.sample,
+                model_id:
+                    lang === "en"
+                        ? ASTROLOGER_TTS.model_id
+                        : MULTILINGUAL_MODEL,
                 voice_settings: {
                     speed: ASTROLOGER_SPEED,
                     stability: ASTROLOGER_TTS.stability,
@@ -148,7 +161,7 @@ export class ElevenLabsService {
             audio: data.audio_base64,
             words: data.alignment ? toWords(data.alignment) : [],
         }
-        this.previews.set(astrologer.id, preview)
+        this.previews.set(key, preview)
         return preview
     }
 

@@ -1,5 +1,6 @@
 import { checkSchema } from "express-validator"
 import { ASTROLOGER_IDS } from "../constants/astrologers.ts"
+import { SupportedLanguages } from "../constants/index.ts"
 
 const character = {
     isIn: {
@@ -27,6 +28,11 @@ export const sessionValidator = checkSchema(
         },
         // true only for the introduction, which the astrologer speaks first
         greet: { optional: true, isBoolean: { options: { strict: true } } },
+        // the portal's language: the astrologer reads the chart and speaks in it
+        lang: {
+            optional: true,
+            isIn: { options: [Object.values(SupportedLanguages)] },
+        },
     },
     ["body"],
 )

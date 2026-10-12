@@ -6,6 +6,7 @@ import {
     type Language,
 } from "../constants/index.ts"
 import en from "../data/readings/en.ts"
+import de from "../data/readings/de.ts"
 import type {
     Aspect,
     NatalChart,
@@ -20,6 +21,7 @@ import type {
 /** Add a language by writing src/data/readings/<lang>.ts and listing it here. */
 const COPY: Record<Language, ReadingCopy> = {
     [SupportedLanguages.EN]: en,
+    [SupportedLanguages.DE]: de,
 }
 
 export function isSupportedLanguage(value: string): value is Language {
@@ -195,7 +197,7 @@ export class ReadingService {
                 [
                     this.captionFor(copy, saturn),
                     this.captionFor(copy, jupiter),
-                    this.captionFor(copy, mc, "midheaven"),
+                    this.captionFor(copy, mc, copy.labels.midheaven),
                 ],
                 [
                     fill(copy.templates.midheaven, {

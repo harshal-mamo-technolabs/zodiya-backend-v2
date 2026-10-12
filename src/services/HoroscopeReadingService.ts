@@ -25,6 +25,7 @@ import {
     type SignRelation,
 } from "../constants/index.ts"
 import en from "../data/horoscope/en.ts"
+import de from "../data/horoscope/de.ts"
 import type {
     HoroscopeCategoryEntry,
     HoroscopeCopy,
@@ -36,8 +37,12 @@ import type { ChartService } from "./ChartService.ts"
 
 const COPY: Record<Language, HoroscopeCopy> = {
     [SupportedLanguages.EN]: en,
+    [SupportedLanguages.DE]: de,
 }
-const LOCALE: Record<Language, string> = { [SupportedLanguages.EN]: "en-GB" }
+const LOCALE: Record<Language, string> = {
+    [SupportedLanguages.EN]: "en-GB",
+    [SupportedLanguages.DE]: "de-DE",
+}
 const NUMERALS = ["I", "II", "III", "IV", "V", "VI"]
 
 const fill = (template: string, values: Record<string, string>) => {
@@ -127,7 +132,7 @@ export class HoroscopeReadingService {
     /** The lights take an article: "the Moon squares your sign". */
     private name(body: Body, copy: HoroscopeCopy): string {
         return body === Bodies.MOON || body === Bodies.SUN
-            ? `the ${copy.bodies[body]}`
+            ? copy.lights[body]
             : copy.bodies[body]
     }
 
@@ -296,7 +301,7 @@ export class HoroscopeReadingService {
                         sign: copy.signs[e.sign].name,
                         date:
                             period === HoroscopePeriods.DAILY
-                                ? "today"
+                                ? copy.notes.today
                                 : when(e.date),
                     }),
                 )

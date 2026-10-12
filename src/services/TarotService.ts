@@ -11,11 +11,13 @@ import {
     type TarotSpread,
 } from "../constants/index.ts"
 import en from "../data/tarot/en.ts"
+import de from "../data/tarot/de.ts"
 import type { TarotCopy, TarotDrawResponse } from "../types/index.ts"
 
 /** Add a language by writing src/data/tarot/<lang>.ts and listing it here. */
 const COPY: Record<Language, TarotCopy> = {
     [SupportedLanguages.EN]: en,
+    [SupportedLanguages.DE]: de,
 }
 
 export class TarotService {

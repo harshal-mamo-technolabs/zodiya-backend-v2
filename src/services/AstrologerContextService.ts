@@ -8,18 +8,24 @@ import type { HoroscopeReadingService } from "./HoroscopeReadingService.ts"
 import type { NumerologyService } from "./NumerologyService.ts"
 import type { NumerologyReadingService } from "./NumerologyReadingService.ts"
 import { localDate } from "../utils/index.ts"
-import copy from "../data/readings/en.ts"
+import {
+    bestPlaces,
+    computeLines,
+    nearby,
+    ORB_KM,
+} from "./AstrocartographyService.ts"
+import en from "../data/readings/en.ts"
+import de from "../data/readings/de.ts"
 import {
     Bodies,
     DEFAULT_LANGUAGE,
     HoroscopePeriods,
+    type Language,
     type Body,
     type ZodiacSign,
 } from "../constants/index.ts"
 
-// the same English names the pages print
-const sign = (s: ZodiacSign) => copy.signs[s].name
-const body = (b: Body) => copy.bodyNames[b]
+const COPY = { en, de }
 
 const ordinal = (n: number) =>
     String(n) +
@@ -44,8 +50,15 @@ export class AstrologerContextService {
         private numerologyReadingService: NumerologyReadingService,
     ) {}
 
-    build(profile: ProfileDocument, now = new Date()): string {
-        const lang = DEFAULT_LANGUAGE
+    build(
+        profile: ProfileDocument,
+        lang: Language = DEFAULT_LANGUAGE,
+        now = new Date(),
+    ): string {
+        // the same sign and planet names the pages print in this language
+        const copy = COPY[lang]
+        const sign = (s: ZodiacSign) => copy.signs[s].name
+        const body = (b: Body) => copy.bodyNames[b]
         const zone = profile.timezoneId
         const natal = this.profileService.natal(profile)
         const reading = this.readingService.build(natal, lang)
@@ -84,11 +97,13 @@ export class AstrologerContextService {
                 (s) => `- ${s.title}: ${s.paragraphs[0] ?? ""}`,
             ),
             "",
-            ...this.transits(profile, natal, now),
+            ...this.transits(profile, natal, now, lang),
             "",
-            ...this.horoscope(profile, now),
+            ...this.horoscope(profile, now, lang),
             "",
-            ...this.numerology(profile, now),
+            ...this.numerology(profile, now, lang),
+            "",
+            ...this.astrocartography(profile, natal, body),
         ]
 
         return lines.join("\n")
@@ -98,13 +113,14 @@ export class AstrologerContextService {
         profile: ProfileDocument,
         natal: ReturnType<ProfileService["natal"]>,
         now: Date,
+        lang: Language,
     ) {
         const raw = this.transitService.compute(natal, profile.timezoneId, now)
         const reading = this.transitReadingService.build(
             raw,
             natal,
             profile.city,
-            DEFAULT_LANGUAGE,
+            lang,
         )
         const active = reading.events.filter(
             (e) => e.span[0] <= reading.today && reading.today <= e.span[1],
@@ -123,7 +139,7 @@ export class AstrologerContextService {
         ]
     }
 
-    private horoscope(profile: ProfileDocument, now: Date) {
+    private horoscope(profile: ProfileDocument, now: Date, lang: Language) {
         const zone = profile.timezoneId
         const raw = this.horoscopeService.compute(
             profile.zodiacSign,
@@ -131,20 +147,40 @@ export class AstrologerContextService {
             localDate(zone, now.getTime()),
             zone,
         )
-        const h = this.horoscopeReadingService.build(raw, DEFAULT_LANGUAGE)
+        const h = this.horoscopeReadingService.build(raw, lang)
         return [
             `Daily horoscope for ${h.signName}: ${h.headline} Mood ${h.mood.label}. ${h.moonLine}`,
             ...h.categories.map((c) => `- ${c.title}: ${c.text}`),
         ]
     }
 
-    private numerology(profile: ProfileDocument, now: Date) {
+    /** Lines near the birthplace and the best city per life theme, as the globe page shows them. */
+    private astrocartography(
+        profile: ProfileDocument,
+        natal: ReturnType<ProfileService["natal"]>,
+        body: (b: Body) => string,
+    ) {
+        const lines = computeLines(natal)
+        const line = (l: { body: Body; angle: string; km: number }) =>
+            `${body(l.body)} ${l.angle} line (${String(Math.round(l.km))} km away)`
+        const home = nearby(lines, profile.lat, profile.lon).slice(0, 4)
+        return [
+            `Astrocartography (where each planet was rising AC, overhead MC, setting DC or underfoot IC at birth; lines count within ${String(ORB_KM)} km):`,
+            `- Near the birthplace, ${profile.city}: ${home.map(line).join(", ") || "no planet line, open sky"}.`,
+            ...bestPlaces(lines).map(
+                ({ theme, best }) =>
+                    `- Best listed city for ${theme}: ${best ? `${best.city}, on the ${line(best)}` : "none of the listed cities sits near a matching line"}.`,
+            ),
+        ]
+    }
+
+    private numerology(profile: ProfileDocument, now: Date, lang: Language) {
         const name =
             profile.birthName ?? `${profile.firstName} ${profile.lastName}`
         try {
             const n = this.numerologyReadingService.build(
                 this.numerologyService.compute(name, profile.birthDate, now),
-                DEFAULT_LANGUAGE,
+                lang,
             )
             return [
                 `Numerology for "${name}":`,

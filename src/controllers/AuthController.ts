@@ -1,7 +1,6 @@
 import { type NextFunction, type Request, type Response } from "express"
 import { validationResult } from "express-validator"
 import createHttpError from "http-errors"
-import type { JwtPayload } from "jsonwebtoken"
 import type { Logger } from "winston"
 import type {
     AccountPatch,
@@ -13,7 +12,7 @@ import type {
 } from "../types/index.ts"
 import type { UserDocument } from "../models/User.ts"
 import type { UserService } from "../services/UserService.ts"
-import type { TokenService } from "../services/TokenService.ts"
+import { tokenPayload, type TokenService } from "../services/TokenService.ts"
 import type { CredentialService } from "../services/CredentialService.ts"
 import type { BillingService } from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
@@ -280,14 +279,34 @@ export default class AuthController {
         }
     }
 
-    private async setAuthCookies(res: Response, user: UserDocument) {
-        const payload: JwtPayload = {
-            sub: user._id.toString(),
-            role: user.role,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            email: user.email,
+    /** The onboarding funnel's one-time token in, the app's normal session out. */
+    async handoff(req: Request, res: Response, next: NextFunction) {
+        const { token } = req.body as { token?: unknown }
+        try {
+            const userId =
+                typeof token === "string"
+                    ? await this.tokenService.consumeHandoffToken(token)
+                    : null
+            const user = userId ? await this.userService.findById(userId) : null
+            if (!user) {
+                next(
+                    createHttpError(
+                        401,
+                        "This sign-in link has expired. Please log in.",
+                    ),
+                )
+                return
+            }
+            await this.setAuthCookies(res, user)
+            this.logger.info("Signed in from the funnel", { id: user._id })
+            res.status(200).json({ id: user._id })
+        } catch (e) {
+            next(e)
         }
+    }
+
+    private async setAuthCookies(res: Response, user: UserDocument) {
+        const payload = tokenPayload(user)
 
         const accessToken = this.tokenService.generateAccessToken(payload)
         const refreshToken = await this.tokenService.generateRefreshToken(

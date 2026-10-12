@@ -16,6 +16,7 @@ import {
     type SynastrySection,
 } from "../constants/index.ts"
 import en from "../data/synastry/en.ts"
+import de from "../data/synastry/de.ts"
 import type {
     SynastryContact,
     SynastryContactEntry,
@@ -29,6 +30,7 @@ import { strength } from "./SynastryService.ts"
 
 const COPY: Record<Language, SynastryCopy> = {
     [SupportedLanguages.EN]: en,
+    [SupportedLanguages.DE]: de,
 }
 
 const NUMERALS = ["I", "II", "III", "IV"]
@@ -113,7 +115,13 @@ export class SynastryReadingService {
         return {
             ...c,
             glyph: aspect.glyph,
-            text: `${names.a}'s ${copy.bodies[c.a]} ${aspect.verb} ${names.b}'s ${copy.bodies[c.b]}`,
+            text: fill(copy.contact, {
+                a: names.a,
+                b: names.b,
+                bodyA: copy.bodies[c.a],
+                bodyB: copy.bodies[c.b],
+                verb: aspect.verb,
+            }),
             orbText: `${copy.labels.orb} ${c.orb.toFixed(1)}°`,
         }
     }

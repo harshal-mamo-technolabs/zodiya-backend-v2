@@ -47,9 +47,29 @@ export const config = {
     STRIPE_PUBLIC_KEY: requireEnv("STRIPE_PUBLIC_KEY"),
     // only the webhook needs it, and it exists only once the endpoint is registered
     STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET ?? "",
+    // "false" makes the whole app free: no plan, profile or minute limits, and
+    // nothing can be bought. Anything else (or unset) keeps payments on.
+    PAYMENTS_ENABLED: process.env.PAYMENTS_ENABLED !== "false",
+    // signs the Help Scout Beacon identity; support chat stays anonymous without it
+    HELPSCOUT_SECURE_MODE_KEY: process.env.HELPSCOUT_SECURE_MODE_KEY ?? "",
     // browser origins allowed to call the API with cookies, comma-separated
     CORS_ORIGINS: (process.env.CORS_ORIGINS ?? "")
         .split(",")
         .map((o) => o.trim())
         .filter(Boolean),
+    // palm reading only; the app boots without it and /palm/read answers 503
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
+    OPENAI_VISION_MODEL: process.env.OPENAI_VISION_MODEL ?? "gpt-6-luna",
+    OPENAI_TIMEOUT_MS: Number(process.env.OPENAI_TIMEOUT_MS ?? 60000),
+    // redraws the palm photo with its lines highlighted
+    OPENAI_IMAGE_MODEL: process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2.5-flare",
+    OPENAI_IMAGE_QUALITY: process.env.OPENAI_IMAGE_QUALITY ?? "medium",
+    OPENAI_IMAGE_TIMEOUT_MS: Number(
+        process.env.OPENAI_IMAGE_TIMEOUT_MS ?? 120000,
+    ),
+    // palm photos; the app boots without them and palm requests answer 503
+    AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID ?? "",
+    AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY ?? "",
+    AWS_BUCKET_NAME: process.env.AWS_BUCKET_NAME ?? "",
+    AWS_REGION: process.env.AWS_REGION ?? "eu-north-1",
 }

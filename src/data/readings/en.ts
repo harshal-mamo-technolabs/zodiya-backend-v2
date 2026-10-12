@@ -525,6 +525,7 @@ const en: ReadingCopy = {
         moon: "MOON",
         ascendant: "ASC",
         retrograde: "retrograde",
+        midheaven: "midheaven",
     },
 }
 

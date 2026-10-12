@@ -212,41 +212,43 @@ describe("SynastryReadingService", () => {
         if (!sample) {
             throw new Error("no contacts")
         }
-        for (const key of SYNASTRY_SECTION_ORDER) {
-            for (const pair of SYNASTRY_PAIRS[key]) {
-                const [a, b] = pair.split("-") as [
-                    typeof sample.a,
-                    typeof sample.b,
-                ]
-                for (const type of Object.values(AspectTypes)) {
-                    const fake = reading.build(
-                        {
-                            ...computed,
-                            contacts: [
-                                {
-                                    ...sample,
-                                    a,
-                                    b,
-                                    type,
-                                    kind:
-                                        type === "conjunction"
-                                            ? "conjunction"
-                                            : ["trine", "sextile"].includes(
-                                                    type,
-                                                )
-                                              ? "flow"
-                                              : "tense",
-                                },
-                            ],
-                        },
-                        { id: "a", firstName: "Amara", name: "Amara" },
-                        { id: "b", firstName: "Tomás", name: "Tomás" },
-                        "en",
-                    )
-                    const section = fake.sections.find((s) => s.key === key)
-                    const para = section?.paragraphs[0] ?? ""
-                    expect(para.length).toBeGreaterThan(80)
-                    expect(para).toMatch(/Amara|Tomás/)
+        for (const lang of ["en", "de"] as const) {
+            for (const key of SYNASTRY_SECTION_ORDER) {
+                for (const pair of SYNASTRY_PAIRS[key]) {
+                    const [a, b] = pair.split("-") as [
+                        typeof sample.a,
+                        typeof sample.b,
+                    ]
+                    for (const type of Object.values(AspectTypes)) {
+                        const fake = reading.build(
+                            {
+                                ...computed,
+                                contacts: [
+                                    {
+                                        ...sample,
+                                        a,
+                                        b,
+                                        type,
+                                        kind:
+                                            type === "conjunction"
+                                                ? "conjunction"
+                                                : ["trine", "sextile"].includes(
+                                                        type,
+                                                    )
+                                                  ? "flow"
+                                                  : "tense",
+                                    },
+                                ],
+                            },
+                            { id: "a", firstName: "Amara", name: "Amara" },
+                            { id: "b", firstName: "Tomás", name: "Tomás" },
+                            lang,
+                        )
+                        const section = fake.sections.find((s) => s.key === key)
+                        const para = section?.paragraphs[0] ?? ""
+                        expect(para.length).toBeGreaterThan(80)
+                        expect(para).toMatch(/Amara|Tomás/)
+                    }
                 }
             }
         }

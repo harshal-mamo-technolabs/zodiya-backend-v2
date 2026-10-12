@@ -151,7 +151,10 @@ const en: NumerologyCopy = {
             "{value} turns up {count} times in your name, more than any other number.",
         challengeAgain:
             "The same lesson as an earlier chapter. When one repeats, it usually means the first pass did not finish it.",
+        and: "and",
     },
+
+    ordinals: ["First", "Second", "Third", "Fourth"],
 
     sections: {
         personalYear: {

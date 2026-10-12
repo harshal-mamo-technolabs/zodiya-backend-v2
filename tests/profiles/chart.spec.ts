@@ -287,7 +287,7 @@ describe("ReadingService", () => {
     })
 
     it("falls back to english for an unknown language", () => {
-        const reading = readingService.build(chart, "de" as "en")
+        const reading = readingService.build(chart, "xx" as "en")
         expect(reading.lang).toBe("en")
     })
 
@@ -305,8 +305,11 @@ describe("ReadingService", () => {
         )
 
         it("renders every paragraph with no unresolved placeholder", () => {
-            for (const sample of charts) {
-                const reading = readingService.build(sample, "en")
+            for (const sample of charts.flatMap((c) => [
+                [c, "en"] as const,
+                [c, "de"] as const,
+            ])) {
+                const reading = readingService.build(sample[0], sample[1])
                 const strings = [
                     ...reading.headline,
                     reading.summary,

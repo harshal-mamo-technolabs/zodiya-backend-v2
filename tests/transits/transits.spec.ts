@@ -261,26 +261,34 @@ describe("TransitReadingService", () => {
         if (!sample) {
             throw new Error("no planetary event")
         }
-        for (const transit of TRANSIT_BODIES) {
-            for (const aspect of Object.keys(
-                TRANSIT_ASPECT_ANGLES,
-            ) as TransitAspect[]) {
-                for (const point of NATAL_POINTS) {
-                    const fake = reading.build(
-                        {
-                            ...base,
-                            events: [
-                                { ...sample, transit, aspect, natal: point },
-                            ],
-                        },
-                        natal,
-                        "Lagos",
-                        "en",
-                    )
-                    const e = fake.events[0]
-                    expect(e?.lede.length ?? 0).toBeGreaterThan(8)
-                    expect(e?.text.length ?? 0).toBeGreaterThan(120)
-                    expect(e?.advice.length ?? 0).toBeGreaterThan(20)
+        for (const lang of ["en", "de"] as const) {
+            for (const transit of TRANSIT_BODIES) {
+                for (const aspect of Object.keys(
+                    TRANSIT_ASPECT_ANGLES,
+                ) as TransitAspect[]) {
+                    for (const point of NATAL_POINTS) {
+                        const fake = reading.build(
+                            {
+                                ...base,
+                                events: [
+                                    {
+                                        ...sample,
+                                        transit,
+                                        aspect,
+                                        natal: point,
+                                    },
+                                ],
+                            },
+                            natal,
+                            "Lagos",
+                            lang,
+                        )
+                        const e = fake.events[0]
+                        expect(e?.lede.length ?? 0).toBeGreaterThan(8)
+                        expect(e?.text.length ?? 0).toBeGreaterThan(120)
+                        expect(e?.title).not.toMatch(/\{/)
+                        expect(e?.advice.length ?? 0).toBeGreaterThan(20)
+                    }
                 }
             }
         }

@@ -35,6 +35,7 @@ if (!KEY) {
 const TOOL_NAME = "open_reading"
 const TAROT_TOOL = "tarot"
 const SWITCH_TOOL = "switch_profile"
+const PLACE_TOOL = "astrocartography"
 
 async function api<T>(method: string, url: string, body?: unknown): Promise<T> {
     const response = await fetch(`https://api.elevenlabs.io${url}`, {
@@ -110,7 +111,7 @@ const OPEN_READING = {
                 type: "string",
                 enum: [...READING_PAGES],
                 description:
-                    "natal = natal chart, transits = current transits, horoscope = daily horoscope, numerology, synastry = compatibility, tarot",
+                    "natal = natal chart, transits = current transits, horoscope = daily horoscope, numerology, synastry = compatibility, tarot, astrocartography = the globe of planet lines on Earth, palm = palm reading",
             },
             partner: {
                 type: "string",
@@ -150,6 +151,28 @@ const TAROT = {
                 type: "string",
                 description:
                     'reveal only: which card to turn, "1", "2", "3" from the left, or "all". Leave out to turn the next face-down card.',
+            },
+        },
+    },
+}
+
+/* Turns the astrocartography globe to a place: the app answers with the
+   planet lines that really pass near it, so the agent never guesses. */
+const PLACE = {
+    type: "client",
+    name: PLACE_TOOL,
+    description:
+        "Shows a place on the astrocartography globe, opening the page if needed, and returns the user's planet lines near it with their meanings. Call it whenever the user asks what a city, country or place would mean for them, or wants to see a place on their map.",
+    expects_response: true,
+    response_timeout_secs: 10,
+    parameters: {
+        type: "object",
+        required: ["place"],
+        properties: {
+            place: {
+                type: "string",
+                description:
+                    "The place as the user said it, e.g. Lisbon, New York, Bali or Japan.",
             },
         },
     },
@@ -205,7 +228,8 @@ You are talking with {{user_name}}, who is on the "{{page}}" page of the app. Be
 {{chart_context}}
 
 Rules:
-- Only discuss readings in the app for this user and the profiles they have saved: natal chart, planets, houses, aspects, transits, daily horoscope, numerology, synastry and tarot. If they ask about anything else (news, general knowledge, lottery or gambling predictions, medical, legal or financial advice, other people's private details), decline kindly in one sentence and offer to explain one of their placements instead.
+- Always speak {{language}}, whatever language the chart notes above are in. Use the {{language}} names for signs, planets and houses.
+- Only discuss readings in the app for this user and the profiles they have saved: natal chart, planets, houses, aspects, transits, daily horoscope, numerology, synastry, tarot, astrocartography and palm reading. If they ask about anything else (news, general knowledge, lottery or gambling predictions, medical, legal or financial advice, other people's private details), decline kindly in one sentence and offer to explain one of their placements instead.
 - Your words are spoken aloud. Answer in two to four short sentences, about seventy words at most. No markdown, lists, emoji or symbols: say "degrees", not the degree sign.
 - If the user is silent, stay silent. Never ask whether they are still there or want to keep talking, and never end an answer with a question unless you truly need something from them.
 - Speak warmly and without hurry. Use their first name now and then, not in every answer.
@@ -214,7 +238,9 @@ Rules:
 - For compatibility with a named person, call ${TOOL_NAME} with page synastry and partner set to that name; the app opens the comparison on screen. If the app replies that no saved profile matches, say so in one sentence, name the saved profiles they can choose from, and suggest they add the person themselves from Birth Details in the menu.
 - You can only pick from profiles already saved. You can never create, add, edit or delete a profile, even if asked: do not collect anyone's birth date, time or place. Explain kindly that they add or change profiles themselves from Birth Details in the menu, and once it is saved you can switch to it or compare with it.
 - To switch whose readings the app shows, call ${SWITCH_TOOL} with the name. Confirm in one short sentence, calling them by the new profile's first name; the new chart reaches you a moment later. Whoever's profile is active is the person you are talking with, so address them by that name and speak of that chart as theirs.
-- For tarot, use ${TAROT_TOOL}: draw to lay out a spread (yesNo for a yes or no question, single for one card, three for past, present and future), then reveal to turn cards when they ask. Read only the cards the app returns, in your own words, briefly. Do not reveal cards they have not asked to turn, and never make up a card.`
+- For tarot, use ${TAROT_TOOL}: draw to lay out a spread (yesNo for a yes or no question, single for one card, three for past, present and future), then reveal to turn cards when they ask. Read only the cards the app returns, in your own words, briefly. Do not reveal cards they have not asked to turn, and never make up a card.
+- Astrocartography: the notes above list the planet lines near their birthplace and the best listed city for love, career, luck and home. When they ask about a specific place, or where to live, travel or work, call ${PLACE_TOOL} with that place; the globe turns to it on screen and the app returns the lines near it. Speak only about the lines the app returns or the notes list, never guess a line. A place with no line nearby is "open sky": calm, neither charged nor difficult.
+- Palm reading: you cannot see or take photos. The notes above hold the saved palm readings for this person, if any; explain them in your own words. To get a new reading, open the palm page with ${TOOL_NAME} and tell them to photograph their open palm in good daylight or pick one from their gallery; the app reads it and highlights the lines. Palm lines never predict lifespan or health.`
 }
 
 function agentBody(a: Astrologer, voiceId: string, toolIds: string[]) {
@@ -233,6 +259,7 @@ function agentBody(a: Astrologer, voiceId: string, toolIds: string[]) {
                         page: "dashboard",
                         greeting: "",
                         chart_context: "No chart is available.",
+                        language: "English",
                     },
                 },
                 prompt: {
@@ -242,6 +269,9 @@ function agentBody(a: Astrologer, voiceId: string, toolIds: string[]) {
                     tool_ids: toolIds,
                 },
             },
+            // German switches the agent to the multilingual v2.5 voice model;
+            // the app picks the language per session (agent.language override)
+            language_presets: { de: { overrides: {} } },
             tts: {
                 ...ASTROLOGER_TTS,
                 voice_id: voiceId,
@@ -276,6 +306,7 @@ function agentBody(a: Astrologer, voiceId: string, toolIds: string[]) {
             auth: { enable_auth: true },
             overrides: {
                 conversation_config_override: {
+                    agent: { language: true },
                     tts: { speed: true },
                     conversation: { text_only: true },
                 },
@@ -299,6 +330,7 @@ if (process.argv.includes("--voices")) {
         await ensureTool(OPEN_READING),
         await ensureTool(TAROT),
         await ensureTool(SWITCH_PROFILE),
+        await ensureTool(PLACE),
     ]
     const { agents } = await api<{
         agents: { agent_id: string; name: string }[]

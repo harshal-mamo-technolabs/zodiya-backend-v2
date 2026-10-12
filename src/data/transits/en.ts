@@ -6,6 +6,7 @@ import {
     TransitAspects,
     TransitTextGroups,
     TransitTones,
+    ZodiacSigns,
 } from "../../constants/index.ts"
 import type { TransitCopy } from "../../types/index.ts"
 
@@ -50,6 +51,23 @@ const en: TransitCopy = {
         [TransitAspects.TRINE]: { name: "Trine", glyph: "△" },
         [TransitAspects.QUINCUNX]: { name: "Quincunx", glyph: "⚻" },
         [TransitAspects.OPPOSITION]: { name: "Opposition", glyph: "☍" },
+    },
+
+    title: "{transit} {aspectLower} {natal}",
+
+    signs: {
+        [ZodiacSigns.ARIES]: "Aries",
+        [ZodiacSigns.TAURUS]: "Taurus",
+        [ZodiacSigns.GEMINI]: "Gemini",
+        [ZodiacSigns.CANCER]: "Cancer",
+        [ZodiacSigns.LEO]: "Leo",
+        [ZodiacSigns.VIRGO]: "Virgo",
+        [ZodiacSigns.LIBRA]: "Libra",
+        [ZodiacSigns.SCORPIO]: "Scorpio",
+        [ZodiacSigns.SAGITTARIUS]: "Sagittarius",
+        [ZodiacSigns.CAPRICORN]: "Capricorn",
+        [ZodiacSigns.AQUARIUS]: "Aquarius",
+        [ZodiacSigns.PISCES]: "Pisces",
     },
 
     points: {

@@ -323,7 +323,10 @@ export interface ReadingCopy {
     midheaven: Record<ZodiacSign, string>
     templates: Record<ReadingTemplateKey, string>
     sections: Record<ReadingSectionKey, ReadingSectionCopy>
-    labels: Record<"sun" | "moon" | "ascendant" | "retrograde", string>
+    labels: Record<
+        "sun" | "moon" | "ascendant" | "retrograde" | "midheaven",
+        string
+    >
 }
 
 export interface NumerologyStep {
@@ -445,7 +448,11 @@ export interface NumerologyCopy {
         chapter: string
         passion: string
         challengeAgain: string
+        /** Joins the last two labels: "Life Path and Destiny". */
+        and: string
     }
+    /** The {ordinal} of each pinnacle chapter, first to fourth. */
+    ordinals: string[]
     sections: NumerologySectionCopy
     personalYear: {
         heading: string
@@ -622,6 +629,9 @@ export interface TransitCopy {
     labels: TransitLabels
     tones: Record<TransitTone, string>
     aspects: Record<TransitAspect, { name: string; glyph: string }>
+    /** Card title: "{transit} {aspect} {natal}"; {aspectLower} is the name in lower case. */
+    title: string
+    signs: Record<ZodiacSign, string>
     points: Record<NatalPoint, string>
     lunations: Record<Lunation, string>
     motion: {
@@ -766,6 +776,8 @@ export interface SynastryCopy {
     bodies: Record<Body, string>
     signs: Record<ZodiacSign, string>
     aspects: Record<AspectType, { verb: string; glyph: string }>
+    /** One contact in a line: "{a}'s {bodyA} {verb} {b}'s {bodyB}" */
+    contact: string
     /** "first" to "twelfth" */
     ordinals: string[]
     /** What each house is about, one short phrase per house, index 0 = first. */
@@ -915,6 +927,8 @@ export interface HoroscopeCopy {
     labels: HoroscopeLabels
     signs: Record<ZodiacSign, { name: string; abbr: string; range: string }>
     bodies: Record<Body, string>
+    /** The lights in running text take an article: "the Moon squares your sign". */
+    lights: { sun: string; moon: string }
     aspects: Record<AspectType, string>
     phases: Record<MoonPhase, string>
     colours: Record<ZodiacSign, string>
@@ -943,6 +957,8 @@ export interface HoroscopeCopy {
         ingress: string
         moonRun: string
         house: string
+        /** The {date} of a daily lunation. */
+        today: string
     }
 }
 
