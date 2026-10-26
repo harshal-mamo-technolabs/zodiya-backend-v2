@@ -1,4 +1,4 @@
-FROM node:20-bullseye
+FROM node:22-bookworm
 
 # Install Nginx, supervisor, and Puppeteer dependencies
 RUN apt-get update && \
@@ -23,7 +23,7 @@ WORKDIR /var/www/html
 # Copy package files
 COPY package.json package-lock.json ./
 
-# Install all dependencies (tsc is a dev dependency)
+# Install all dependencies (tsc and husky are dev dependencies)
 RUN npm ci
 
 # Copy application code, compile to dist/, then drop dev dependencies
@@ -54,7 +54,7 @@ ENV PUPPETEER_CACHE_DIR=/home/node/.cache/puppeteer \
     HOME=/home/node
 
 # Expose Node/Nginx port
-EXPOSE 5053
+EXPOSE 5062
 
 # Volume for logs
 VOLUME /logs

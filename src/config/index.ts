@@ -52,11 +52,6 @@ export const config = {
     PAYMENTS_ENABLED: process.env.PAYMENTS_ENABLED !== "false",
     // signs the Help Scout Beacon identity; support chat stays anonymous without it
     HELPSCOUT_SECURE_MODE_KEY: process.env.HELPSCOUT_SECURE_MODE_KEY ?? "",
-    // browser origins allowed to call the API with cookies, comma-separated
-    CORS_ORIGINS: (process.env.CORS_ORIGINS ?? "")
-        .split(",")
-        .map((o) => o.trim())
-        .filter(Boolean),
     // palm reading only; the app boots without it and /palm/read answers 503
     OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
     OPENAI_VISION_MODEL: process.env.OPENAI_VISION_MODEL ?? "gpt-6-luna",

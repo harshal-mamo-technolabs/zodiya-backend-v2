@@ -5,7 +5,6 @@ import express, {
 } from "express"
 import cookieParser from "cookie-parser"
 import { type HttpError } from "http-errors"
-import { config } from "./config/index.ts"
 import logger from "./config/logger.ts"
 import authRouter from "./routes/authRouter.ts"
 import profileRouter from "./routes/profileRouter.ts"
@@ -22,9 +21,13 @@ import billingRouter from "./routes/billingRouter.ts"
 import palmRouter from "./routes/palmRouter.ts"
 
 const app = express()
+// Cloudflare -> panel proxy -> container nginx, so the client IP is 3 hops back
+// ponytail: hard-coded hop count, update it if a proxy layer is added or removed
+app.set("trust proxy", 3)
 app.use((req, res, next) => {
     const origin = req.headers.origin
-    if (origin && config.CORS_ORIGINS.includes(origin)) {
+    // any origin may call the API with cookies
+    if (origin) {
         res.setHeader("Access-Control-Allow-Origin", origin)
         res.setHeader("Access-Control-Allow-Credentials", "true")
         res.setHeader(
