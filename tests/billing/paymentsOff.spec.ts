@@ -1,6 +1,5 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { config } from "../../src/config/index.ts"
@@ -14,6 +13,7 @@ import {
     geoData,
     profileData,
     registerAndGetCookie,
+    resetDB,
     userData,
 } from "../utils/index.ts"
 
@@ -27,7 +27,7 @@ describe("PAYMENTS_ENABLED=false", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
         jest.replaceProperty(config, "PAYMENTS_ENABLED", false)
         // no plan at all: everything must still work
@@ -84,6 +84,10 @@ describe("PAYMENTS_ENABLED=false", () => {
                 .post("/billing/minutes")
                 .set("Cookie", [cookie])
                 .send({ pack: "pack_10" }),
+            request(app)
+                .post("/billing/palm")
+                .set("Cookie", [cookie])
+                .send({ pack: "palm_3" }),
             request(app).post("/billing/card").set("Cookie", [cookie]),
         ]
         for (const response of await Promise.all(calls)) {

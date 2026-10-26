@@ -1,10 +1,9 @@
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
 import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
-import { userData } from "../utils/index.ts"
+import { resetDB, userData } from "../utils/index.ts"
 
 describe("POST /auth/logout", () => {
     let mongod: MongoMemoryServer
@@ -16,7 +15,7 @@ describe("POST /auth/logout", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         const response = await request(app)
             .post("/auth/register")
             .send(userData)

@@ -1,5 +1,4 @@
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
@@ -16,7 +15,7 @@ import {
     ZodiacSigns,
 } from "../../src/constants/index.ts"
 import type { HoroscopeResponse } from "../../src/types/index.ts"
-import { registerAndGetCookie } from "../utils/index.ts"
+import { registerAndGetCookie, resetDB } from "../utils/index.ts"
 
 const chart = new ChartService()
 const service = new HoroscopeService(chart)
@@ -297,7 +296,7 @@ describe("GET /horoscope", () => {
     beforeAll(async () => {
         mongod = await MongoMemoryServer.create()
         await connectDB(mongod.getUri())
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         cookie = await registerAndGetCookie(app)
     })
 

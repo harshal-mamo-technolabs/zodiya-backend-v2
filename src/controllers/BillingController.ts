@@ -5,18 +5,8 @@ import type { AuthRequest } from "../types/index.ts"
 import type { BillingService } from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { config } from "../config/index.ts"
-import {
-    CURRENCY,
-    MAX_PACK_QUANTITY,
-    MINUTE_PACKS,
-    PLANS,
-    PLAN_TIERS,
-    INCLUDED_PROFILES,
-    PROFILE_PACKS,
-    TRIAL,
-    type BillingKind,
-    type PlanTier,
-} from "../constants/billing.ts"
+import type { BillingKind } from "../constants/index.ts"
+import { catalog } from "../services/CatalogService.ts"
 
 export default class BillingController {
     constructor(
@@ -25,29 +15,11 @@ export default class BillingController {
     ) {}
 
     /** Public: the pricing page reads prices from here, not from the bundle. */
-    catalog(_req: Request, res: Response) {
+    async catalog(_req: Request, res: Response) {
         res.status(200).json({
             paymentsEnabled: config.PAYMENTS_ENABLED,
             publishableKey: config.STRIPE_PUBLIC_KEY,
-            currency: CURRENCY,
-            plans: PLAN_TIERS.map((t) => {
-                const { tier, name, amount, months, minutes } = PLANS[t]
-                return { tier, name, amount, months, minutes }
-            }),
-            trial: {
-                tier: TRIAL.tier,
-                amount: TRIAL.amount,
-                days: TRIAL.days,
-                minutes: TRIAL.minutes,
-            },
-            includedProfiles: INCLUDED_PROFILES,
-            profilePacks: PROFILE_PACKS.map(({ id, extra, amount }) => ({
-                id,
-                extra,
-                amount,
-            })),
-            minutePacks: MINUTE_PACKS,
-            maxPackQuantity: MAX_PACK_QUANTITY,
+            ...(await catalog.catalog()),
         })
     }
 
@@ -56,7 +28,7 @@ export default class BillingController {
     }
 
     async subscribe(req: AuthRequest, res: Response, next: NextFunction) {
-        const { plan, trial } = req.body as { plan: PlanTier; trial?: boolean }
+        const { plan, trial } = req.body as { plan: string; trial?: boolean }
         await this.run(req, res, next, async (userId) => {
             const step = await this.billing.subscribe(userId, plan, !!trial)
             this.logger.info("Checkout started", { userId, plan, trial })
@@ -65,7 +37,7 @@ export default class BillingController {
     }
 
     async changePlan(req: AuthRequest, res: Response, next: NextFunction) {
-        const { plan } = req.body as { plan: PlanTier }
+        const { plan } = req.body as { plan: string }
         await this.run(req, res, next, async (userId) => {
             const step = await this.billing.changePlan(userId, plan)
             this.logger.info("Plan change requested", { userId, plan })
@@ -105,6 +77,16 @@ export default class BillingController {
         }
         await this.run(req, res, next, (userId) =>
             this.billing.buyMinutes(userId, pack, quantity ?? 1),
+        )
+    }
+
+    async buyPalm(req: AuthRequest, res: Response, next: NextFunction) {
+        const { pack, quantity } = req.body as {
+            pack: string
+            quantity?: number
+        }
+        await this.run(req, res, next, (userId) =>
+            this.billing.buyPalm(userId, pack, quantity ?? 1),
         )
     }
 

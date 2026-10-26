@@ -1,4 +1,5 @@
 import { type NextFunction, type Request, type Response } from "express"
+import { klaviyo } from "../services/KlaviyoService.ts"
 import { validationResult } from "express-validator"
 import createHttpError from "http-errors"
 import type { Logger } from "winston"
@@ -64,6 +65,8 @@ export default class AuthController {
                 password,
             )
 
+            // a direct sign-up: no campaign, so its utm fields read "default"
+            void klaviyo.account(user._id)
             this.logger.info("User has been registered", { id: user._id })
 
             await this.setAuthCookies(res, user)

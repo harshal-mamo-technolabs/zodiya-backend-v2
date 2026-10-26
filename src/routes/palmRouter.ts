@@ -12,6 +12,9 @@ import { ChartService } from "../services/ChartService.ts"
 import { ReadingService } from "../services/ReadingService.ts"
 import { ProfileModel } from "../models/Profile.ts"
 import { PalmReadingModel } from "../models/PalmReading.ts"
+import { UserModel } from "../models/User.ts"
+import { BillingGrantModel } from "../models/BillingGrant.ts"
+import { BillingService } from "../services/BillingService.ts"
 import { config } from "../config/index.ts"
 import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
@@ -34,6 +37,7 @@ const controller = new PalmController(
         new ReadingService(),
     ),
     PalmReadingModel,
+    new BillingService(UserModel, ProfileModel, BillingGrantModel),
     logger,
 )
 
@@ -62,6 +66,20 @@ const highlights = rateLimit({
     skip: () => config.NODE_ENV === "test",
     message: {
         errors: [{ msg: "Too many palm drawings. Try again in an hour." }],
+    },
+})
+
+// rendering a PDF is CPU work, so keep it to a sane number per hour
+const pdfs = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 30,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    keyGenerator: (req) =>
+        (req as AuthRequest).auth?.sub ?? ipKeyGenerator(req.ip ?? ""),
+    skip: () => config.NODE_ENV === "test",
+    message: {
+        errors: [{ msg: "Too many PDF downloads. Try again in an hour." }],
     },
 })
 
@@ -164,6 +182,15 @@ router.get(
     requirePlan,
     palmIdValidator,
     controller.get.bind(controller),
+)
+
+router.get(
+    "/readings/:id/pdf",
+    authenticate,
+    requirePlan,
+    pdfs,
+    palmIdValidator,
+    controller.pdf.bind(controller),
 )
 
 router.delete(

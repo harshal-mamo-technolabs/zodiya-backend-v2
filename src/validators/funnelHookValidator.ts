@@ -1,5 +1,5 @@
 import { checkSchema } from "express-validator"
-import { PLAN_TIERS } from "../constants/billing.ts"
+import { plan } from "./billingValidator.ts"
 import { GENDERS } from "../models/User.ts"
 import { UTM_FIELDS } from "../models/LandingPageHook.ts"
 
@@ -53,6 +53,6 @@ export const hookUpdateValidator = checkSchema({
         optional: true,
         isBoolean: { options: { strict: true } },
     },
-    plan: { optional: true, isIn: { options: [PLAN_TIERS] } },
+    plan: { optional: true, ...plan },
     trial: { optional: true, isBoolean: { options: { strict: true } } },
 })

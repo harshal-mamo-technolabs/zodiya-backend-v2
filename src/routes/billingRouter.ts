@@ -10,6 +10,7 @@ import requirePlan, { requirePayments } from "../middlewares/requirePlan.ts"
 import {
     changePlanValidator,
     minutesValidator,
+    palmValidator,
     payOpenValidator,
     profilePackValidator,
     saveCardValidator,
@@ -106,6 +107,14 @@ router.post(
     requirePlan,
     minutesValidator,
     controller.buyMinutes.bind(controller),
+)
+router.post(
+    "/palm",
+    authenticate,
+    requirePayments,
+    requirePlan,
+    palmValidator,
+    controller.buyPalm.bind(controller),
 )
 
 export default router

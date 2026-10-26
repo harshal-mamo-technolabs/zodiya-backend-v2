@@ -1,6 +1,9 @@
 import request from "supertest"
 import type { Express } from "express"
+import mongoose from "mongoose"
 import { UserModel } from "../../src/models/User.ts"
+import { catalog } from "../../src/services/CatalogService.ts"
+import { seedBilling } from "../../scripts/seedBilling.ts"
 
 export const userData = {
     firstName: "harshal",
@@ -26,7 +29,23 @@ export const geoData = {
     timezoneId: "Asia/Kolkata",
 }
 
-/** What a paying account looks like: a live plan, spare profile slots, minutes. */
+/** An empty database with the real initial billing catalog in it. */
+export async function resetDB() {
+    await mongoose.connection.dropDatabase()
+    catalog.clearCache()
+    await seedBilling()
+}
+
+/** A plan from the seeded catalog; throws when there is none. */
+export async function planOf(tier: string) {
+    const plan = await catalog.plan(tier)
+    if (!plan) {
+        throw new Error(`No ${tier} plan in the catalog`)
+    }
+    return plan
+}
+
+/** What a paying account looks like: a live plan, spare profile slots, minutes, palm readings. */
 export async function grantPlan(email = userData.email) {
     await UserModel.updateOne(
         { email },
@@ -44,6 +63,7 @@ export async function grantPlan(email = userData.email) {
                     status: "active",
                 },
                 "billing.minutes": { allowance: 900, used: 0, topup: 0 },
+                "billing.palm": { allowance: 3, used: 0, topup: 0 },
             },
         },
     )

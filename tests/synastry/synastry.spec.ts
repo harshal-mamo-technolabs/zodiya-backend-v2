@@ -1,6 +1,5 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
@@ -19,7 +18,12 @@ import {
     TransitTextGroups,
 } from "../../src/constants/index.ts"
 import type { SynastryResponse } from "../../src/types/index.ts"
-import { geoData, profileData, registerAndGetCookie } from "../utils/index.ts"
+import {
+    geoData,
+    profileData,
+    registerAndGetCookie,
+    resetDB,
+} from "../utils/index.ts"
 
 const chart = new ChartService()
 const synastry = new SynastryService(chart)
@@ -281,7 +285,7 @@ describe("GET /profiles/:id/synastry/:otherId", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
         cookie = await registerAndGetCookie(app)
         const first = await request(app)

@@ -5,21 +5,19 @@ import { config } from "../config/index.ts"
 import type { User, UserDocument } from "../models/User.ts"
 import type { Profile } from "../models/Profile.ts"
 import type { BillingGrant } from "../models/BillingGrant.ts"
+import { LandingPageHookModel } from "../models/LandingPageHook.ts"
+import {
+    KlaviyoEvents,
+    klaviyo,
+    planProfile,
+    profilePlanProfile,
+} from "./KlaviyoService.ts"
 import {
     BillingKinds,
-    CURRENCY,
     ENTITLED_STATUSES,
-    MINUTE_PACKS,
-    PLANS,
-    PLAN_TIERS,
-    INCLUDED_PROFILES,
-    PROFILE_PACKS,
-    TRIAL,
-    planByLookupKey,
-    profilePackByLookupKey,
     type BillingKind,
-    type PlanTier,
-} from "../constants/billing.ts"
+} from "../constants/index.ts"
+import { catalog } from "./CatalogService.ts"
 
 /** The only Stripe client; tests spy on its resources. */
 // cards are the only way we take money: plans, profiles, top-ups and saved cards alike
@@ -36,7 +34,7 @@ export interface PaymentStep {
     /** Cents due now. */
     amount: number
     description: string
-    /** Set for minute packs, so the client can ask for them to be credited. */
+    /** Set for minute and palm packs, so the client can ask for them to be credited. */
     paymentIntentId?: string
 }
 
@@ -48,12 +46,24 @@ export interface MinutesLeft {
     total: number
 }
 
+/** Palm readings left, counted in readings. */
+export interface PalmLeft {
+    /** Left of this cycle's plan readings. */
+    plan: number
+    /** Bought in packs; never expire. */
+    topup: number
+    total: number
+}
+
+/** Where a reserved palm reading came from, so a refund goes back there. */
+export type PalmBucket = "plan" | "topup"
+
 export interface BillingStatus {
     /** False when PAYMENTS_ENABLED=false: everything is free and nothing is sold. */
     paymentsEnabled: boolean
     entitled: boolean
     plan: {
-        tier: PlanTier
+        tier: string
         name: string
         status: string
         trial: boolean
@@ -72,6 +82,7 @@ export interface BillingStatus {
         currentPeriodEnd: string | null
     }
     minutes: MinutesLeft
+    palm: PalmLeft
 }
 
 export interface SavedCard {
@@ -104,6 +115,22 @@ const same = (value: number) => (value === 0 ? { $in: [0, null] } : value)
 
 const INVOICE_SECRET = ["latest_invoice.confirmation_secret"]
 
+const PRICE_TTL_MS = 60_000
+
+// a price whose lookup key moved to a newer price (scripts/setupStripe.ts)
+// still names its plan or pack in its metadata
+type PriceRef = Partial<Pick<Stripe.Price, "lookup_key" | "metadata">>
+
+const planOf = async (price: PriceRef | undefined) =>
+    (await catalog.planByLookupKey(price?.lookup_key)) ??
+    (await catalog.plan(price?.metadata?.tier))
+
+const profilePackOf = async (price: PriceRef | undefined) =>
+    (await catalog.profilePackByLookupKey(price?.lookup_key)) ??
+    (await catalog.profilePacks()).find(
+        (p) => p.packId === price?.metadata?.pack,
+    )
+
 // the campaign that brought the customer, on everything they buy in Stripe
 const utm = (user: UserDocument) => ({
     utm_source: user.utm_source || "default",
@@ -118,6 +145,13 @@ export function minutesLeft(billing: Billing | null | undefined): MinutesLeft {
     return { plan, topup, total: plan + topup }
 }
 
+export function palmLeft(billing: Billing | null | undefined): PalmLeft {
+    const p = billing?.palm
+    const plan = Math.max(0, (p?.allowance ?? 0) - (p?.used ?? 0))
+    const topup = Math.max(0, p?.topup ?? 0)
+    return { plan, topup, total: plan + topup }
+}
+
 /**
  * Everything money: Stripe subscriptions for the plan and the extra
  * profiles, one-off minute packs, and the minute balance they feed. The user
@@ -125,7 +159,7 @@ export function minutesLeft(billing: Billing | null | undefined): MinutesLeft {
  * and both are idempotent.
  */
 export class BillingService {
-    private prices: Record<string, string> | null = null
+    private prices: { at: number; ids: Record<string, string> } | null = null
 
     constructor(
         private userModel: Model<User>,
@@ -136,10 +170,11 @@ export class BillingService {
     // ------------------------------------------------------------ reads
 
     async status(userId: string): Promise<BillingStatus> {
+        await this.initPalm(userId)
         const user = await this.user(userId)
         const b = user.billing
         const plan = b?.plan
-        const tier = plan?.tier as PlanTier | undefined
+        const current = await catalog.plan(plan?.tier)
         const extra = isEntitled(b?.profiles?.status)
             ? (b?.profiles?.quantity ?? 0)
             : 0
@@ -147,10 +182,10 @@ export class BillingService {
             paymentsEnabled: config.PAYMENTS_ENABLED,
             entitled: !config.PAYMENTS_ENABLED || isEntitled(plan?.status),
             plan:
-                tier && plan?.status
+                plan?.tier && plan.status
                     ? {
-                          tier,
-                          name: PLANS[tier].name,
+                          tier: plan.tier,
+                          name: current?.name ?? plan.tier,
                           status: plan.status,
                           trial: plan.status === "trialing",
                           currentPeriodEnd:
@@ -160,15 +195,16 @@ export class BillingService {
                     : null,
             trialAvailable: !b?.trialUsed,
             profiles: {
-                included: INCLUDED_PROFILES,
+                included: await catalog.includedProfiles(plan?.tier),
                 extra,
-                pack: PROFILE_PACKS.find((p) => p.extra === extra)?.id ?? null,
+                pack: (await catalog.profilePackByExtra(extra))?.packId ?? null,
                 used: await this.profileModel.countDocuments({ user: userId }),
                 status: b?.profiles?.status ?? null,
                 currentPeriodEnd:
                     b?.profiles?.currentPeriodEnd?.toISOString() ?? null,
             },
             minutes: minutesLeft(b),
+            palm: palmLeft(b),
         }
     }
 
@@ -244,9 +280,10 @@ export class BillingService {
     /** Starts a plan; the first invoice is paid in the browser. */
     async subscribe(
         userId: string,
-        tier: PlanTier,
+        tier: string,
         trial: boolean,
     ): Promise<PaymentStep> {
+        const plan = await this.onSale(tier)
         const user = await this.user(userId)
         if (isEntitled(user.billing?.plan?.status)) {
             throw createHttpError(
@@ -254,10 +291,14 @@ export class BillingService {
                 "You already have a plan. Switch plans from the billing page.",
             )
         }
-        if (trial && (tier !== TRIAL.tier || user.billing?.trialUsed)) {
+        const offer = plan.trial
+        if (trial && (!offer || user.billing?.trialUsed)) {
+            const trialPlan = await catalog.trialPlan()
             throw createHttpError(
                 400,
-                "The trial is only for Starter, once per account.",
+                trialPlan
+                    ? `The trial is only for ${trialPlan.name}, once per account.`
+                    : "There is no trial.",
             )
         }
 
@@ -268,7 +309,7 @@ export class BillingService {
         const prices = await this.priceIds()
         const sub = await stripe.subscriptions.create({
             customer,
-            items: [{ price: prices[PLANS[tier].lookupKey] ?? "" }],
+            items: [{ price: prices[plan.lookupKey] ?? "" }],
             payment_behavior: "default_incomplete",
             payment_settings: {
                 save_default_payment_method: "on_subscription",
@@ -276,32 +317,33 @@ export class BillingService {
             },
             metadata: { userId, kind: BillingKinds.PLAN, ...utm(user) },
             expand: INVOICE_SECRET,
-            ...(trial && {
-                trial_period_days: TRIAL.days,
-                add_invoice_items: [{ price: prices[TRIAL.lookupKey] ?? "" }],
-            }),
+            ...(trial &&
+                offer && {
+                    trial_period_days: offer.days,
+                    add_invoice_items: [
+                        { price: prices[offer.lookupKey] ?? "" },
+                    ],
+                }),
         })
         await this.applySubscription(sub)
         return this.step(
             sub.latest_invoice,
-            trial
-                ? `${String(TRIAL.days)}-day ${PLANS[tier].name} trial`
-                : `${PLANS[tier].name} plan`,
+            trial && offer
+                ? `${String(offer.days)}-day ${plan.name} trial`
+                : `${plan.name} plan`,
         )
     }
 
     /** Moves to another plan now; the unused part of the old one is credited. */
-    async changePlan(userId: string, tier: PlanTier): Promise<PaymentStep> {
+    async changePlan(userId: string, tier: string): Promise<PaymentStep> {
+        const next = await this.onSale(tier)
         const user = await this.user(userId)
         const plan = user.billing?.plan
         if (!plan?.subscriptionId || !isEntitled(plan.status)) {
             throw createHttpError(400, "There is no active plan to change.")
         }
         if (plan.tier === tier) {
-            throw createHttpError(
-                400,
-                `You are already on ${PLANS[tier].name}.`,
-            )
+            throw createHttpError(400, `You are already on ${next.name}.`)
         }
 
         let sub = await stripe.subscriptions.retrieve(plan.subscriptionId)
@@ -318,9 +360,7 @@ export class BillingService {
 
         const prices = await this.priceIds()
         const updated = await stripe.subscriptions.update(sub.id, {
-            items: [
-                { id: item.id, price: prices[PLANS[tier].lookupKey] ?? "" },
-            ],
+            items: [{ id: item.id, price: prices[next.lookupKey] ?? "" }],
             proration_behavior: "always_invoice",
             billing_cycle_anchor: "now",
             // the change is only applied once its invoice is paid
@@ -328,7 +368,7 @@ export class BillingService {
             ...(sub.status === "trialing" && { trial_end: "now" as const }),
             expand: INVOICE_SECRET,
         })
-        return this.afterUpdate(updated, `Switch to ${PLANS[tier].name}`)
+        return this.afterUpdate(updated, `Switch to ${next.name}`)
     }
 
     /** Plan and extra profiles both stop at the end of the paid period. */
@@ -360,7 +400,7 @@ export class BillingService {
         userId: string,
         packId: string,
     ): Promise<PaymentStep> {
-        const pack = PROFILE_PACKS.find((p) => p.id === packId)
+        const pack = await catalog.profilePack(packId)
         if (!pack) {
             throw createHttpError(400, "Unknown profile pack")
         }
@@ -371,7 +411,9 @@ export class BillingService {
             })
         }
         const used = await this.profileModel.countDocuments({ user: userId })
-        const allowed = INCLUDED_PROFILES + pack.extra
+        const allowed =
+            (await catalog.includedProfiles(user.billing?.plan?.tier)) +
+            pack.extra
         if (used > allowed) {
             throw createHttpError(
                 409,
@@ -432,27 +474,63 @@ export class BillingService {
         packId: string,
         quantity: number,
     ): Promise<PaymentStep> {
-        const pack = MINUTE_PACKS.find((p) => p.id === packId)
+        const pack = await catalog.minutePack(packId)
         if (!pack) {
             throw createHttpError(400, "Unknown minute pack")
         }
+        const minutes = pack.minutes * quantity
+        return this.sellPack(
+            userId,
+            pack.amount * quantity,
+            `${String(minutes)} astrologer minutes`,
+            {
+                kind: BillingKinds.MINUTES,
+                minutes: String(minutes),
+                pack: pack.packId,
+                quantity: String(quantity),
+            },
+        )
+    }
+
+    async buyPalm(
+        userId: string,
+        packId: string,
+        quantity: number,
+    ): Promise<PaymentStep> {
+        const pack = await catalog.palmPack(packId)
+        if (!pack) {
+            throw createHttpError(400, "Unknown palm pack")
+        }
+        const readings = pack.readings * quantity
+        return this.sellPack(
+            userId,
+            pack.amount * quantity,
+            `${String(readings)} palm readings`,
+            {
+                kind: BillingKinds.PALM,
+                readings: String(readings),
+                pack: pack.packId,
+                quantity: String(quantity),
+            },
+        )
+    }
+
+    /** A one-off card payment; its webhook credits what the metadata says. */
+    private async sellPack(
+        userId: string,
+        amount: number,
+        description: string,
+        metadata: Record<string, string>,
+    ): Promise<PaymentStep> {
         const user = await this.user(userId)
         const customer = await this.customerFor(user)
-        const minutes = pack.minutes * quantity
-        const amount = pack.amount * quantity
-        const description = `${String(minutes)} astrologer minutes`
         const intent = await stripe.paymentIntents.create({
             amount,
-            currency: CURRENCY,
+            currency: (await catalog.settings()).currency,
             customer,
             description,
             payment_method_types: ["card"],
-            metadata: {
-                userId,
-                kind: BillingKinds.MINUTES,
-                minutes: String(minutes),
-                ...utm(user),
-            },
+            metadata: { userId, ...metadata, ...utm(user) },
         })
         return {
             clientSecret: intent.client_secret,
@@ -668,6 +746,99 @@ export class BillingService {
         throw createHttpError(409, "Could not record minutes used")
     }
 
+    // ------------------------------------------------------------- palm
+
+    /**
+     * Takes one palm reading before it is made: plan readings first, then
+     * bought ones. Each step is one conditional update, so two readings at
+     * once cannot spend the same credit. Null when there is none left.
+     */
+    async reservePalm(
+        userId: string | Types.ObjectId,
+    ): Promise<PalmBucket | null> {
+        await this.initPalm(userId)
+        const plan = await this.userModel.updateOne(
+            {
+                _id: userId,
+                $expr: {
+                    $gte: [
+                        {
+                            $subtract: [
+                                { $ifNull: ["$billing.palm.allowance", 0] },
+                                { $ifNull: ["$billing.palm.used", 0] },
+                            ],
+                        },
+                        1,
+                    ],
+                },
+            },
+            { $inc: { "billing.palm.used": 1 } },
+        )
+        if (plan.modifiedCount === 1) {
+            return "plan"
+        }
+        const topup = await this.userModel.updateOne(
+            { _id: userId, "billing.palm.topup": { $gte: 1 } },
+            { $inc: { "billing.palm.topup": -1 } },
+        )
+        return topup.modifiedCount === 1 ? "topup" : null
+    }
+
+    /** Gives back a reserved reading that was not delivered. */
+    async refundPalm(userId: string | Types.ObjectId, bucket: PalmBucket) {
+        await (bucket === "plan"
+            ? // a new cycle may have reset `used` meanwhile; never go below zero
+              this.userModel.updateOne(
+                  { _id: userId, "billing.palm.used": { $gte: 1 } },
+                  { $inc: { "billing.palm.used": -1 } },
+              )
+            : this.userModel.updateOne(
+                  { _id: userId },
+                  { $inc: { "billing.palm.topup": 1 } },
+              ))
+    }
+
+    async palmCredits(userId: string): Promise<PalmLeft> {
+        return palmLeft((await this.user(userId)).billing)
+    }
+
+    /**
+     * Accounts from before palm credits have no `billing.palm` until their
+     * next invoice; a live plan gets this cycle's readings once, now.
+     */
+    // ponytail: one extra read per call; drop once every account has billing.palm
+    private async initPalm(userId: string | Types.ObjectId) {
+        // lean: a hydrated document would fill in the 0 defaults
+        const user = await this.userModel
+            .findById(userId)
+            .select("billing.plan billing.palm")
+            .lean()
+        const plan = user?.billing?.plan
+        if (
+            user?.billing?.palm?.allowance !== undefined ||
+            !plan?.tier ||
+            !isEntitled(plan.status)
+        ) {
+            return
+        }
+        const current = await catalog.plan(plan.tier)
+        if (!current) {
+            return
+        }
+        await this.userModel.updateOne(
+            { _id: userId, "billing.palm.allowance": { $exists: false } },
+            {
+                $set: {
+                    "billing.palm.allowance":
+                        plan.status === "trialing"
+                            ? (current.trial?.palm ?? 0)
+                            : current.palm,
+                    "billing.palm.used": 0,
+                },
+            },
+        )
+    }
+
     // --------------------------------------------------------- internals
 
     private async user(userId: string): Promise<UserDocument> {
@@ -699,15 +870,31 @@ export class BillingService {
         return customer.id
     }
 
-    private async priceIds(): Promise<Record<string, string>> {
-        if (this.prices) {
-            return this.prices
+    /** A plan that is on sale; anything else is a 400. */
+    private async onSale(tier: string) {
+        const plan = (await catalog.plans()).find((p) => p.tier === tier)
+        if (!plan) {
+            throw createHttpError(400, "Unknown plan")
         }
+        return plan
+    }
+
+    private async priceIds(): Promise<Record<string, string>> {
+        const plans = await catalog.plans()
         const keys = [
-            ...PLAN_TIERS.map((t) => PLANS[t].lookupKey),
-            TRIAL.lookupKey,
-            ...PROFILE_PACKS.map((p) => p.lookupKey),
+            ...plans.map((p) => p.lookupKey),
+            ...plans.flatMap((p) => (p.trial ? [p.trial.lookupKey] : [])),
+            ...(await catalog.profilePacks()).map((p) => p.lookupKey),
         ]
+        // re-read now and then: setupStripe may move a lookup key to a new price
+        const cached = this.prices
+        if (
+            cached &&
+            Date.now() - cached.at < PRICE_TTL_MS &&
+            keys.every((k) => cached.ids[k])
+        ) {
+            return cached.ids
+        }
         const list = await stripe.prices.list({
             lookup_keys: keys,
             active: true,
@@ -722,7 +909,7 @@ export class BillingService {
                 "Billing is not set up yet. Run npm run stripe:setup.",
             )
         }
-        this.prices = found
+        this.prices = { at: Date.now(), ids: found }
         return found
     }
 
@@ -805,9 +992,7 @@ export class BillingService {
             [`billing.${path}.currentPeriodEnd`]: periodEnd,
         }
         if (kind === BillingKinds.PLAN) {
-            set["billing.plan.tier"] = planByLookupKey(
-                item?.price.lookup_key,
-            )?.tier
+            set["billing.plan.tier"] = (await planOf(item?.price))?.tier
             set["billing.plan.cancelAtPeriodEnd"] =
                 sub.cancel_at_period_end || sub.cancel_at !== null
             if (sub.status === "trialing") {
@@ -816,9 +1001,10 @@ export class BillingService {
         } else {
             // the mirror counts extra profiles, which the pack's price decides
             set["billing.profiles.quantity"] =
-                profilePackByLookupKey(item?.price.lookup_key)?.extra ?? 0
+                (await profilePackOf(item?.price))?.extra ?? 0
         }
         await this.userModel.updateOne({ _id: user._id }, { $set: set })
+        await this.subscriptionToKlaviyo(user, sub, set)
 
         // no plan, no paid profiles: stop billing for them straight away
         const ended = ["canceled", "incomplete_expired", "unpaid"]
@@ -835,7 +1021,89 @@ export class BillingService {
         }
     }
 
-    /** A paid plan invoice sets this cycle's minutes. */
+    /**
+     * A plan or profile pack changed (renewed, trial over, switched,
+     * cancelled, ended): the new state goes to Klaviyo. Only real changes are
+     * sent, since syncs replay the same subscription often. A plan's first
+     * payment is left to applyInvoice.
+     */
+    private async subscriptionToKlaviyo(
+        user: UserDocument,
+        sub: Stripe.Subscription,
+        set: Record<string, unknown>,
+    ) {
+        const plan = sub.metadata.kind === BillingKinds.PLAN
+        const path = plan ? "plan" : "profiles"
+        const was = user.billing?.[path]
+        const neverPaid = [undefined, null, "incomplete", "incomplete_expired"]
+        const end = (
+            set[`billing.${path}.currentPeriodEnd`] as Date | null
+        )?.getTime()
+        const changed =
+            was?.subscriptionId !== sub.id ||
+            was.status !== sub.status ||
+            was.currentPeriodEnd?.getTime() !== end ||
+            (plan
+                ? user.billing?.plan?.cancelAtPeriodEnd !==
+                  set["billing.plan.cancelAtPeriodEnd"]
+                : user.billing?.profiles?.quantity !==
+                  set["billing.profiles.quantity"])
+        if (!changed || neverPaid.includes(sub.status)) {
+            return
+        }
+
+        if (plan) {
+            const current = await catalog.plan(
+                set["billing.plan.tier"] as string | undefined,
+            )
+            if (current && !neverPaid.includes(was?.status)) {
+                await klaviyo.account(user._id, planProfile(sub, current))
+            }
+            return
+        }
+
+        const pack = await profilePackOf(sub.items.data[0]?.price)
+        const fields = profilePlanProfile(sub, pack)
+        const { currency } = await catalog.settings()
+        const bought = {
+            "astromeridian:profile_pack": pack?.packId ?? null,
+            "astromeridian:extra_profiles": pack?.extra ?? 0,
+            "astromeridian:amount": (pack?.amount ?? 0) / 100,
+            "astromeridian:currency": currency.toUpperCase(),
+        }
+        const wasLive = isEntitled(was?.status)
+        const live = isEntitled(sub.status)
+        const event =
+            !wasLive && live && neverPaid.includes(was?.status)
+                ? {
+                      metric: KlaviyoEvents.PROFILE_PLAN_PURCHASED,
+                      properties: bought,
+                      uniqueId: `profile_plan_purchased:${sub.id}`,
+                  }
+                : wasLive && !live && sub.status !== "past_due"
+                  ? {
+                        metric: KlaviyoEvents.PROFILE_PLAN_CANCELLED,
+                        properties: bought,
+                        uniqueId: `profile_plan_cancelled:${sub.id}`,
+                    }
+                  : wasLive &&
+                      live &&
+                      was?.subscriptionId === sub.id &&
+                      user.billing?.profiles?.quantity !==
+                          set["billing.profiles.quantity"]
+                    ? {
+                          metric: KlaviyoEvents.PROFILE_PLAN_CHANGED,
+                          properties: {
+                              ...bought,
+                              "astromeridian:previous_extra_profiles":
+                                  user.billing?.profiles?.quantity ?? 0,
+                          },
+                      }
+                    : undefined
+        await klaviyo.account(user._id, fields, event)
+    }
+
+    /** A paid plan invoice sets this cycle's minutes and palm readings. */
     private async applyInvoice(
         invoice: Stripe.Invoice,
         known?: Stripe.Subscription,
@@ -858,7 +1126,7 @@ export class BillingService {
             return
         }
         const reason = invoice.billing_reason
-        const plan = planByLookupKey(sub.items.data[0]?.price.lookup_key)
+        const plan = await planOf(sub.items.data[0]?.price)
         const user = await this.userModel.findOne({
             "billing.customerId": idOf(sub.customer),
         })
@@ -875,20 +1143,52 @@ export class BillingService {
             return
         }
 
-        const allowance =
-            (sub.status === "trialing" ? TRIAL.minutes : plan.minutes) * 60
+        // a trialing subscription is granted its plan's trial allowance
+        const grants =
+            sub.status === "trialing" && plan.trial ? plan.trial : plan
+        const allowances = {
+            "billing.minutes.allowance": grants.minutes * 60,
+            "billing.palm.allowance": grants.palm,
+        }
         // a new cycle starts from zero; a plan change keeps what was used,
         // so switching back and forth cannot refill the balance
         const set =
             reason === "subscription_update"
-                ? { "billing.minutes.allowance": allowance }
+                ? allowances
                 : {
-                      "billing.minutes.allowance": allowance,
+                      ...allowances,
                       "billing.minutes.used": 0,
+                      "billing.palm.used": 0,
                   }
         const granted = await this.grant(`invoice:${invoice.id}`, user._id, {
             $set: set,
         })
+
+        // the first payment: an event for a funnel sign-up, fields for anyone
+        // else; a renewal or change refills the balances
+        if (granted && reason === "subscription_create") {
+            const fields = planProfile(sub, plan)
+            const funnel = await LandingPageHookModel.exists({
+                email: user.email,
+            })
+            await klaviyo.account(
+                user._id,
+                funnel
+                    ? {
+                          ...fields,
+                          "astromeridian:landing_page_payment_completed": true,
+                      }
+                    : fields,
+                funnel
+                    ? {
+                          metric: KlaviyoEvents.PAYMENT_COMPLETED,
+                          uniqueId: `payment_completed:${invoice.id}`,
+                      }
+                    : undefined,
+            )
+        } else if (granted) {
+            await klaviyo.account(user._id)
+        }
 
         // the card that paid is the one renewals and top-ups will offer
         const pm = idOf(sub.default_payment_method)
@@ -900,9 +1200,11 @@ export class BillingService {
     }
 
     private async applyPaymentIntent(intent: Stripe.PaymentIntent) {
+        const { kind } = intent.metadata
+        const palm = kind === BillingKinds.PALM
         if (
             intent.status !== "succeeded" ||
-            intent.metadata.kind !== BillingKinds.MINUTES
+            (kind !== BillingKinds.MINUTES && !palm)
         ) {
             return
         }
@@ -910,13 +1212,56 @@ export class BillingService {
             _id: intent.metadata.userId,
             "billing.customerId": idOf(intent.customer),
         })
-        const minutes = Number(intent.metadata.minutes)
-        if (!user || !Number.isInteger(minutes) || minutes <= 0) {
+        const count = Number(
+            palm ? intent.metadata.readings : intent.metadata.minutes,
+        )
+        if (!user || !Number.isInteger(count) || count <= 0) {
             return
         }
-        await this.grant(`payment_intent:${intent.id}`, user._id, {
-            $inc: { "billing.minutes.topup": minutes * 60 },
-        })
+        const granted = await this.grant(
+            `payment_intent:${intent.id}`,
+            user._id,
+            {
+                $inc: palm
+                    ? {
+                          "billing.palm.topup": count,
+                          "billing.palm.purchased": count,
+                      }
+                    : {
+                          "billing.minutes.topup": count * 60,
+                          "billing.minutes.purchased": count * 60,
+                      },
+            },
+        )
+        if (granted) {
+            const now = new Date().toISOString()
+            await klaviyo.account(
+                user._id,
+                palm
+                    ? { "astromeridian:palm_readings_last_purchase_date": now }
+                    : { "astromeridian:astrologer_last_purchase_date": now },
+                {
+                    metric: palm
+                        ? KlaviyoEvents.PALM_READINGS_PURCHASED
+                        : KlaviyoEvents.ASTROLOGER_CREDITS_PURCHASED,
+                    uniqueId: `purchase:${intent.id}`,
+                    properties: {
+                        "astromeridian:pack": intent.metadata.pack ?? null,
+                        "astromeridian:quantity": Number(
+                            intent.metadata.quantity ?? 1,
+                        ),
+                        [palm
+                            ? "astromeridian:readings"
+                            : "astromeridian:minutes"]: count,
+                        "astromeridian:amount": intent.amount / 100,
+                        "astromeridian:currency": (
+                            await catalog.settings()
+                        ).currency.toUpperCase(),
+                        "astromeridian:stripe_payment_intent_id": intent.id,
+                    },
+                },
+            )
+        }
     }
 
     /** Applies an update once per Stripe payment, however often it is seen. */

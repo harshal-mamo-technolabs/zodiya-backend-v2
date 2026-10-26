@@ -5,6 +5,21 @@ export const Roles = {
 
 export type Role = (typeof Roles)[keyof typeof Roles]
 
+// Stripe protocol, not products: what we sell lives in MongoDB (CatalogService)
+
+/** Tags on Stripe objects so a webhook knows what it is looking at. */
+export const BillingKinds = {
+    PLAN: "plan",
+    PROFILES: "profiles",
+    MINUTES: "minutes",
+    PALM: "palm",
+} as const
+
+export type BillingKind = (typeof BillingKinds)[keyof typeof BillingKinds]
+
+/** Subscription states that unlock the app. */
+export const ENTITLED_STATUSES = ["active", "trialing"]
+
 export const Relationships = {
     SELF: "self",
     SPOUSE: "spouse",

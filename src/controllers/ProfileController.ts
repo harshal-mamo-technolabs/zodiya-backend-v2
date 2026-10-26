@@ -1,4 +1,5 @@
 import { type NextFunction, type Response } from "express"
+import { klaviyo } from "../services/KlaviyoService.ts"
 import { validationResult } from "express-validator"
 import createHttpError from "http-errors"
 import type { Logger } from "winston"
@@ -9,6 +10,8 @@ import type {
 } from "../types/index.ts"
 import { profileView, type ProfileService } from "../services/ProfileService.ts"
 import { isSupportedLanguage } from "../services/ReadingService.ts"
+import { natalPdf } from "../services/NatalPdfService.ts"
+import { slug } from "../services/pdf.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { DEFAULT_LANGUAGE, type Language } from "../constants/index.ts"
 
@@ -75,6 +78,7 @@ export default class ProfileController {
                 ...(avatar !== undefined && { avatar }),
             })
 
+            void klaviyo.account(userId)
             this.logger.info("Profile has been created", {
                 id: profile._id,
                 userId,
@@ -230,6 +234,44 @@ export default class ProfileController {
             })
 
             res.status(200).json(chart)
+        } catch (e) {
+            next(e)
+        }
+    }
+
+    /** The chart and its reading as a PDF download. */
+    async chartPdf(req: AuthRequest, res: Response, next: NextFunction) {
+        const result = validationResult(req)
+        if (!result.isEmpty()) {
+            res.status(400).json({
+                errors: result.array(),
+            })
+            return
+        }
+
+        try {
+            const lang = this.resolveLanguage(req.query.lang)
+            const chart = await this.profileService.buildChart(
+                String(req.params.id),
+                getAuthUserId(req),
+                lang,
+            )
+
+            if (!chart) {
+                next(createHttpError(404, "Profile does not exist"))
+                return
+            }
+
+            const pdf = await natalPdf(chart, lang)
+            const name = slug(chart.profile.name, "chart")
+            const date = chart.profile.birthDate.slice(0, 10)
+            res.status(200)
+                .set({
+                    "Content-Type": "application/pdf",
+                    "Content-Disposition": `attachment; filename="astromeridian-natal-chart-${name}-${date}.pdf"`,
+                    "Cache-Control": "private, no-store",
+                })
+                .send(pdf)
         } catch (e) {
             next(e)
         }

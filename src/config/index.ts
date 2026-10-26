@@ -61,15 +61,14 @@ export const config = {
     OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
     OPENAI_VISION_MODEL: process.env.OPENAI_VISION_MODEL ?? "gpt-6-luna",
     OPENAI_TIMEOUT_MS: Number(process.env.OPENAI_TIMEOUT_MS ?? 60000),
-    // redraws the palm photo with its lines highlighted
     OPENAI_IMAGE_MODEL: process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2.5-flare",
     OPENAI_IMAGE_QUALITY: process.env.OPENAI_IMAGE_QUALITY ?? "medium",
     OPENAI_IMAGE_TIMEOUT_MS: Number(
         process.env.OPENAI_IMAGE_TIMEOUT_MS ?? 120000,
     ),
-    // palm photos; the app boots without them and palm requests answer 503
     AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID ?? "",
     AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY ?? "",
     AWS_BUCKET_NAME: process.env.AWS_BUCKET_NAME ?? "",
     AWS_REGION: process.env.AWS_REGION ?? "eu-north-1",
+    KLAVIYO_PRIVATE_API_KEY: process.env.KLAVIYO_PRIVATE_API_KEY ?? "",
 }

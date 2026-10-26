@@ -1,6 +1,5 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import type Stripe from "stripe"
 import app from "../../src/app.ts"
@@ -10,15 +9,21 @@ import { ProfileModel } from "../../src/models/Profile.ts"
 import { BillingGrantModel } from "../../src/models/BillingGrant.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { BillingService, stripe } from "../../src/services/BillingService.ts"
-import { PLANS, PROFILE_PACKS, TRIAL } from "../../src/constants/billing.ts"
+import { catalog, type Plan } from "../../src/services/CatalogService.ts"
 import {
     geoData,
     profileData,
+    planOf,
     registerAndGetCookie,
+    resetDB,
     userData,
 } from "../utils/index.ts"
 
 const SECRET = "whsec_test_secret"
+
+// the seeded catalog's plans, read again after every reset
+let starter: Plan
+let premium: Plan
 const CUSTOMER = `cus_test_${userData.email}`
 
 /** Signs a payload the way Stripe does and posts it to the webhook. */
@@ -53,7 +58,7 @@ function subscription(over: Partial<Stripe.Subscription> = {}) {
                     id: "si_1",
                     quantity: 1,
                     current_period_end: 1_900_000_000,
-                    price: { lookup_key: PLANS.premium.lookupKey },
+                    price: { lookup_key: premium.lookupKey },
                 },
             ],
         },
@@ -82,6 +87,9 @@ function paidInvoice(id: string, reason: string) {
 const minutes = async () =>
     (await UserModel.findOne({ email: userData.email }))?.billing?.minutes
 
+const palm = async () =>
+    (await UserModel.findOne({ email: userData.email }))?.billing?.palm
+
 describe("billing", () => {
     let mongod: MongoMemoryServer
 
@@ -91,7 +99,9 @@ describe("billing", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
+        starter = await planOf("starter")
+        premium = await planOf("premium")
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
     })
 
@@ -146,6 +156,7 @@ describe("billing", () => {
                 plan: null,
                 trialAvailable: true,
                 minutes: { total: 0 },
+                palm: { plan: 0, topup: 0, total: 0 },
             })
 
             const catalog = await request(app).get("/billing/catalog")
@@ -155,6 +166,15 @@ describe("billing", () => {
                     (p) => p.tier,
                 ),
             ).toEqual(["starter", "premium", "gold"])
+            expect(catalog.body).toMatchObject({
+                plans: [{ palm: 3 }, { palm: 10 }, { palm: 25 }],
+                trial: { palm: 1 },
+                palmPacks: [
+                    { id: "palm_3", readings: 3, amount: 499 },
+                    { id: "palm_7", readings: 7, amount: 999 },
+                    { id: "palm_10", readings: 10, amount: 1299 },
+                ],
+            })
         })
 
         it("rejects a status request without a session", async () => {
@@ -221,8 +241,8 @@ describe("billing", () => {
     })
 
     describe("profile packs", () => {
-        const pack = (id: string) => {
-            const found = PROFILE_PACKS.find((p) => p.id === id)
+        const pack = async (id: string) => {
+            const found = await catalog.profilePack(id)
             if (!found) throw new Error(id)
             return found
         }
@@ -245,11 +265,12 @@ describe("billing", () => {
 
         beforeEach(async () => {
             cookie = await registerAndGetCookie(app)
+            const plans = await catalog.plans()
             jest.spyOn(stripe.prices, "list").mockResolvedValue({
                 data: [
-                    ...Object.values(PLANS).map((p) => p.lookupKey),
-                    TRIAL.lookupKey,
-                    ...PROFILE_PACKS.map((p) => p.lookupKey),
+                    ...plans.map((p) => p.lookupKey),
+                    ...plans.flatMap((p) => p.trial?.lookupKey ?? []),
+                    ...(await catalog.profilePacks()).map((p) => p.lookupKey),
                 ].map((key) => ({ id: `price_${key}`, lookup_key: key })),
             } as never)
         })
@@ -260,14 +281,14 @@ describe("billing", () => {
                 .set("Cookie", [cookie])
                 .send({ pack: id })
 
-        it("sells 1, 3 or 6 extra profiles at 5, 12 and 24 euro a month", async () => {
+        it("sells 1, 3 or 6 extra profiles at 2.99, 6.99 and 11.99 euro a month", async () => {
             const catalog = await request(app).get("/billing/catalog")
             expect(
                 (catalog.body as { profilePacks: unknown }).profilePacks,
             ).toEqual([
-                { id: "profiles_1", extra: 1, amount: 500 },
-                { id: "profiles_3", extra: 3, amount: 1200 },
-                { id: "profiles_6", extra: 6, amount: 2400 },
+                { id: "profiles_1", extra: 1, amount: 299 },
+                { id: "profiles_3", extra: 3, amount: 699 },
+                { id: "profiles_6", extra: 6, amount: 1199 },
             ])
         })
 
@@ -279,7 +300,7 @@ describe("billing", () => {
             const create = jest
                 .spyOn(stripe.subscriptions, "create")
                 .mockResolvedValue(
-                    profileSub(pack("profiles_3").lookupKey) as never,
+                    profileSub((await pack("profiles_3")).lookupKey) as never,
                 )
 
             const response = await choose("profiles_3")
@@ -289,7 +310,7 @@ describe("billing", () => {
                 expect.objectContaining({
                     items: [
                         {
-                            price: `price_${pack("profiles_3").lookupKey}`,
+                            price: `price_${(await pack("profiles_3")).lookupKey}`,
                             quantity: 1,
                         },
                     ],
@@ -315,12 +336,12 @@ describe("billing", () => {
                 { $set: { "billing.profiles.quantity": 1 } },
             )
             jest.spyOn(stripe.subscriptions, "retrieve").mockResolvedValue(
-                profileSub(pack("profiles_1").lookupKey) as never,
+                profileSub((await pack("profiles_1")).lookupKey) as never,
             )
             const update = jest
                 .spyOn(stripe.subscriptions, "update")
                 .mockResolvedValue(
-                    profileSub(pack("profiles_6").lookupKey) as never,
+                    profileSub((await pack("profiles_6")).lookupKey) as never,
                 )
 
             const response = await choose("profiles_6")
@@ -332,7 +353,7 @@ describe("billing", () => {
                     items: [
                         {
                             id: "si_1",
-                            price: `price_${pack("profiles_6").lookupKey}`,
+                            price: `price_${(await pack("profiles_6")).lookupKey}`,
                             quantity: 1,
                         },
                     ],
@@ -399,7 +420,7 @@ describe("billing", () => {
                                 id: "si_1",
                                 current_period_end: 1_900_000_000,
                                 price: {
-                                    lookup_key: PLANS.starter.lookupKey,
+                                    lookup_key: starter.lookupKey,
                                 },
                             },
                         ],
@@ -415,7 +436,10 @@ describe("billing", () => {
             const user = await UserModel.findOne({ email: userData.email })
             expect(user?.billing?.trialUsed).toBe(true)
             expect(user?.billing?.plan?.status).toBe("trialing")
-            expect(user?.billing?.minutes?.allowance).toBe(TRIAL.minutes * 60)
+            expect(user?.billing?.minutes?.allowance).toBe(
+                (starter.trial?.minutes ?? 0) * 60,
+            )
+            expect(user?.billing?.palm?.allowance).toBe(1)
         })
 
         it("refills plan minutes each cycle, once per invoice", async () => {
@@ -424,21 +448,33 @@ describe("billing", () => {
             )
             await UserModel.updateOne(
                 { email: userData.email },
-                { $set: { "billing.minutes.used": 500 } },
+                {
+                    $set: {
+                        "billing.minutes.used": 500,
+                        "billing.palm.used": 3,
+                    },
+                },
             )
 
             await deliver(paidInvoice("in_cycle", "subscription_cycle"))
+            expect(await palm()).toMatchObject({ allowance: 10, used: 0 })
             await UserModel.updateOne(
                 { email: userData.email },
-                { $set: { "billing.minutes.used": 100 } },
+                {
+                    $set: {
+                        "billing.minutes.used": 100,
+                        "billing.palm.used": 2,
+                    },
+                },
             )
             // Stripe retries: the same invoice must not reset again
             await deliver(paidInvoice("in_cycle", "subscription_cycle"))
 
             expect(await minutes()).toMatchObject({
-                allowance: PLANS.premium.minutes * 60,
+                allowance: premium.minutes * 60,
                 used: 100,
             })
+            expect(await palm()).toMatchObject({ allowance: 10, used: 2 })
             expect(await BillingGrantModel.countDocuments()).toBe(1)
         })
 
@@ -448,13 +484,19 @@ describe("billing", () => {
             )
             await UserModel.updateOne(
                 { email: userData.email },
-                { $set: { "billing.minutes.used": 600 } },
+                {
+                    $set: {
+                        "billing.minutes.used": 600,
+                        "billing.palm.used": 2,
+                    },
+                },
             )
 
             await deliver(paidInvoice("in_change", "subscription_update"))
+            expect(await palm()).toMatchObject({ allowance: 10, used: 2 })
 
             expect(await minutes()).toMatchObject({
-                allowance: PLANS.premium.minutes * 60,
+                allowance: premium.minutes * 60,
                 used: 600,
             })
         })
@@ -485,6 +527,33 @@ describe("billing", () => {
             expect((await minutes())?.topup).toBe(20 * 60)
         })
 
+        it("credits a palm pack once", async () => {
+            const user = await UserModel.findOne({ email: userData.email })
+            const event = {
+                id: "evt_pi_palm",
+                type: "payment_intent.succeeded",
+                data: {
+                    object: {
+                        id: "pi_palm",
+                        object: "payment_intent",
+                        status: "succeeded",
+                        customer: CUSTOMER,
+                        metadata: {
+                            kind: "palm",
+                            readings: "15",
+                            userId: String(user?._id),
+                        },
+                    },
+                },
+            }
+
+            await deliver(event)
+            await deliver(event)
+
+            expect((await palm())?.topup).toBe(15)
+            expect((await minutes())?.topup).toBe(0)
+        })
+
         it("cancels extra profiles when the plan ends", async () => {
             jest.spyOn(stripe.subscriptions, "retrieve").mockResolvedValue(
                 subscription({ status: "canceled" }) as never,
@@ -509,6 +578,106 @@ describe("billing", () => {
             const user = await UserModel.findOne({ email: userData.email })
             expect(user?.billing?.plan?.status).toBe("canceled")
             expect(user?.billing?.profiles?.status).toBe("canceled")
+        })
+    })
+
+    describe("palm packs", () => {
+        let cookie: string
+
+        beforeEach(async () => {
+            cookie = await registerAndGetCookie(app)
+        })
+
+        const buy = (body: Record<string, unknown>) =>
+            request(app)
+                .post("/billing/palm")
+                .set("Cookie", [cookie])
+                .send(body)
+
+        it("charges a one-off payment for the readings", async () => {
+            const create = jest
+                .spyOn(stripe.paymentIntents, "create")
+                .mockResolvedValue({
+                    id: "pi_palm",
+                    client_secret: "pi_palm_secret",
+                } as never)
+
+            const response = await buy({ pack: "palm_7", quantity: 2 })
+
+            expect(response.statusCode).toBe(200)
+            expect(response.body).toEqual({
+                clientSecret: "pi_palm_secret",
+                amount: 1998,
+                description: "14 palm readings",
+                paymentIntentId: "pi_palm",
+            })
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    amount: 1998,
+                    currency: "eur",
+                    customer: CUSTOMER,
+                    metadata: expect.objectContaining({
+                        kind: "palm",
+                        readings: "14",
+                        utm_source: "default",
+                    }) as unknown,
+                }),
+            )
+        })
+
+        it("refuses an unknown pack and too many packs", async () => {
+            const create = jest.spyOn(stripe.paymentIntents, "create")
+            expect((await buy({ pack: "pack_10" })).statusCode).toBe(400)
+            expect(
+                (await buy({ pack: "palm_3", quantity: 21 })).statusCode,
+            ).toBe(400)
+            expect(create).not.toHaveBeenCalled()
+        })
+
+        it("shows the palm balance in the status", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                {
+                    $set: {
+                        "billing.palm": { allowance: 3, used: 1, topup: 5 },
+                    },
+                },
+            )
+            const status = await request(app)
+                .get("/billing/status")
+                .set("Cookie", [cookie])
+            expect(status.body).toMatchObject({
+                palm: { plan: 2, topup: 5, total: 7 },
+            })
+        })
+
+        it("gives an account from before palm credits this cycle's readings", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                {
+                    $unset: { "billing.palm": 1 },
+                    $set: { "billing.plan.status": "trialing" },
+                },
+            )
+            const status = await request(app)
+                .get("/billing/status")
+                .set("Cookie", [cookie])
+            expect(status.body).toMatchObject({
+                palm: {
+                    plan: starter.trial?.palm,
+                    topup: 0,
+                    total: starter.trial?.palm,
+                },
+            })
+            // once only: what is then used stays used
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.palm.used": 1 } },
+            )
+            const again = await request(app)
+                .get("/billing/status")
+                .set("Cookie", [cookie])
+            expect(again.body).toMatchObject({ palm: { total: 0 } })
         })
     })
 

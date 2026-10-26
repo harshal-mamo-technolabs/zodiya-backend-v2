@@ -10,6 +10,11 @@ import { tokenPayload, type TokenService } from "../services/TokenService.ts"
 import { UserModel, type GENDERS } from "../models/User.ts"
 import { LandingPageHookModel, UTM_FIELDS } from "../models/LandingPageHook.ts"
 import { getAuthUserId } from "../utils/index.ts"
+import {
+    KlaviyoEvents,
+    klaviyo,
+    landingProfile,
+} from "../services/KlaviyoService.ts"
 
 // a subscription that never got paid for leaves one of these behind
 const UNPAID = [undefined, null, "", "incomplete", "incomplete_expired"]
@@ -136,6 +141,21 @@ export default class FunnelController {
                     },
                 )
             }
+            klaviyo.track(
+                KlaviyoEvents.EMAIL_CAPTURED,
+                body.email,
+                landingProfile({
+                    ...body,
+                    birthTime: body.birthTime ?? null,
+                    lat: visit?.lat ?? null,
+                    lon: visit?.lon ?? null,
+                    utm_source: visit?.utm_source ?? null,
+                    utm_campaign: visit?.utm_campaign ?? null,
+                    utm_medium: visit?.utm_medium ?? null,
+                    createdAt: visit?.createdAt ?? user.createdAt,
+                }),
+                `email_captured:${String(user._id)}`,
+            )
             this.logger.info("Signed up through the funnel", { id: user._id })
             res.status(201).json({
                 accessToken: this.tokenService.generateAccessToken(
@@ -184,12 +204,32 @@ export default class FunnelController {
         }
         const { uuid, ...fields } = matchedData(req)
         try {
-            await LandingPageHookModel.updateOne(
+            const hook = await LandingPageHookModel.findOneAndUpdate(
                 { uuid: uuid as string },
                 { $set: fields },
                 // a visit whose first request was lost still gets recorded
-                { upsert: true, setDefaultsOnInsert: true },
+                {
+                    upsert: true,
+                    setDefaultsOnInsert: true,
+                    returnDocument: "after",
+                },
             )
+            // choosing a plan is what starts the payment
+            if (fields.plan && hook.email) {
+                const trial = !!hook.trial
+                klaviyo.track(
+                    KlaviyoEvents.PAYMENT_INITIATED,
+                    hook.email,
+                    {
+                        "astromeridian:landing_page_selected_plan":
+                            hook.plan ?? null,
+                        "astromeridian:landing_page_is_trial_plan": trial,
+                        "astromeridian:landing_page_payment_initiated": true,
+                        "astromeridian:landing_page_payment_completed": false,
+                    },
+                    `payment_initiated:${hook.uuid}:${String(hook.plan)}:${String(trial)}`,
+                )
+            }
             res.status(204).end()
         } catch (e) {
             next(e)

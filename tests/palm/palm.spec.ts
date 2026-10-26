@@ -22,7 +22,9 @@ import { ageFrom } from "../../src/controllers/PalmController.ts"
 import {
     geoData,
     profileData,
+    planOf,
     registerAndGetCookie,
+    resetDB,
     userData,
 } from "../utils/index.ts"
 
@@ -95,7 +97,7 @@ describe("POST /palm/read", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         cookie = await registerAndGetCookie(app)
         userId = String(
             (await UserModel.findOne({ email: userData.email }))?._id,
@@ -432,8 +434,9 @@ describe("POST /palm/read", () => {
     const puts = () => s3Calls.filter((c) => c.name === "PutObjectCommand")
 
     /** A saved reading's id, for the routes that work on one. */
-    const saved = async (withCookie = cookie) => {
-        const response = await read({}, JPEG, "image/jpeg", withCookie)
+    // a hand is read once per person, so repeats need another name
+    const saved = async (withCookie = cookie, name = "Asha Rao") => {
+        const response = await read({ name }, JPEG, "image/jpeg", withCookie)
         return (response.body as { id: string }).id
     }
 
@@ -483,6 +486,32 @@ describe("POST /palm/read", () => {
             expect(firstOpenAIBody().instructions).toContain(
                 "This reading is for harshal chauhan",
             )
+        })
+
+        it("reads each hand once per person, without spending a credit on a repeat", async () => {
+            const profileId = await makeProfile()
+            const first = await read({ profileId })
+            expect(first.statusCode).toBe(200)
+            const calls = openaiSpy.mock.calls.length
+
+            const again = await read({ profileId })
+            const other = await read({ name: "asha rao " })
+            await read({ name: "Asha Rao" })
+            const byName = await read({ name: " ASHA RAO" })
+            const left = await read({ profileId, hand: "left" })
+
+            expect(again.statusCode).toBe(409)
+            const err = (again.body as { errors: Record<string, unknown>[] })
+                .errors[0]
+            expect(err).toMatchObject({
+                code: "hand_already_read",
+                readingId: (first.body as { id: string }).id,
+            })
+            expect(other.statusCode).toBe(200)
+            expect(byName.statusCode).toBe(409)
+            expect(left.statusCode).toBe(200)
+            // the repeats never reached the reader
+            expect(openaiSpy.mock.calls.length).toBe(calls + 2)
         })
 
         it("reads someone else's palm by name, gender and age", async () => {
@@ -594,6 +623,142 @@ describe("POST /palm/read", () => {
                 .get(`/palm/readings/${id}`)
                 .set("Cookie", [cookie])
             expect(one.statusCode).toBe(503)
+        })
+    })
+
+    describe("palm credits", () => {
+        const setPalm = (palm: Record<string, number>) =>
+            UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.palm": palm } },
+            )
+        const palm = async () =>
+            (await UserModel.findOne({ email: userData.email }).lean())?.billing
+                ?.palm
+
+        it("spends plan readings first, then bought ones", async () => {
+            await setPalm({ allowance: 1, used: 0, topup: 2 })
+
+            const first = await read()
+            expect(first.statusCode).toBe(200)
+            expect(first.body).toMatchObject({
+                credits: { plan: 0, topup: 2, total: 2 },
+            })
+            expect(await palm()).toMatchObject({ used: 1, topup: 2 })
+
+            const second = await read({ name: "Mira Shah" })
+            expect(second.body).toMatchObject({
+                credits: { plan: 0, topup: 1, total: 1 },
+            })
+            expect(await palm()).toMatchObject({ used: 1, topup: 1 })
+        })
+
+        it("answers 402 palm_credits_exhausted without calling OpenAI", async () => {
+            await setPalm({ allowance: 3, used: 3, topup: 0 })
+
+            const response = await read()
+
+            expect(response.statusCode).toBe(402)
+            expect(response.body).toMatchObject({
+                errors: [
+                    {
+                        code: "palm_credits_exhausted",
+                        msg: "You've used all your palm readings. Get more to keep reading.",
+                    },
+                ],
+            })
+            expect(openaiSpy).not.toHaveBeenCalled()
+        })
+
+        it("gives the credit back for a turned-away photo", async () => {
+            await setPalm({ allowance: 1, used: 0, topup: 1 })
+            openaiSpy.mockImplementation(
+                () =>
+                    Promise.resolve({
+                        output_text: JSON.stringify(report(false)),
+                    }) as never,
+            )
+            expect((await read()).statusCode).toBe(422)
+            expect(await palm()).toMatchObject({ used: 0, topup: 1 })
+        })
+
+        it("gives a bought credit back when OpenAI fails", async () => {
+            await setPalm({ allowance: 0, used: 0, topup: 1 })
+            openaiSpy.mockImplementation(
+                () => Promise.reject(new Error("boom")) as never,
+            )
+            expect((await read()).statusCode).toBe(502)
+            expect(await palm()).toMatchObject({ used: 0, topup: 1 })
+        })
+
+        it("still spends the credit when only storage fails", async () => {
+            await setPalm({ allowance: 1, used: 0, topup: 0 })
+            s3Fail = "PutObjectCommand"
+            const response = await read()
+            expect(response.body).toMatchObject({
+                saved: false,
+                credits: { total: 0 },
+            })
+            expect(await palm()).toMatchObject({ used: 1 })
+        })
+
+        it("lets only one of two parallel reads take the last credit", async () => {
+            await setPalm({ allowance: 1, used: 0, topup: 0 })
+
+            const codes = (await Promise.all([read(), read()]))
+                .map((r) => r.statusCode)
+                .sort()
+
+            expect(codes).toEqual([200, 402])
+            expect(openaiSpy).toHaveBeenCalledTimes(1)
+            expect(await palm()).toMatchObject({ used: 1 })
+        })
+
+        it("grants this cycle's readings to an account from before palm credits", async () => {
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $unset: { "billing.palm": 1 } },
+            )
+
+            const starter = await planOf("starter")
+            const response = await read()
+
+            expect(response.statusCode).toBe(200)
+            expect(response.body).toMatchObject({
+                credits: { plan: starter.palm - 1 },
+            })
+            expect(await palm()).toMatchObject({
+                allowance: starter.palm,
+                used: 1,
+            })
+        })
+
+        it("is unlimited and spends nothing with payments off", async () => {
+            jest.replaceProperty(config, "PAYMENTS_ENABLED", false)
+            await setPalm({ allowance: 0, used: 0, topup: 0 })
+
+            const response = await read()
+
+            expect(response.statusCode).toBe(200)
+            expect(response.body).toMatchObject({ credits: null })
+            expect(await palm()).toMatchObject({ used: 0, topup: 0 })
+        })
+
+        it("does not spend a credit to draw the lines", async () => {
+            const id = await saved()
+            const before = await palm()
+            jest.spyOn(OpenAI.Images.prototype, "edit").mockImplementation(
+                () =>
+                    Promise.resolve({
+                        created: 0,
+                        data: [{ b64_json: "SElHSA==" }],
+                    }) as never,
+            )
+            const response = await request(app)
+                .post(`/palm/readings/${id}/highlight`)
+                .set("Cookie", [cookie])
+            expect(response.statusCode).toBe(200)
+            expect(await palm()).toEqual(before)
         })
     })
 
@@ -756,7 +921,11 @@ describe("POST /palm/read", () => {
 
     describe("reading history", () => {
         it("lists readings newest first, a page at a time", async () => {
-            const ids = [await saved(), await saved(), await saved()]
+            const ids = [
+                await saved(cookie, "Mira Shah"),
+                await saved(cookie, "Ravi Kumar"),
+                await saved(),
+            ]
             // spread them out so the createdAt cursor is unambiguous
             await Promise.all(
                 ids.map((id, i) =>
@@ -853,6 +1022,66 @@ describe("POST /palm/read", () => {
                         .set("Cookie", [other])
                 ).statusCode,
             ).toBe(404)
+        })
+
+        describe("GET /palm/readings/:id/pdf", () => {
+            // a real 1x1 PNG, so the photo is actually embedded
+            const PNG = Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+                "base64",
+            )
+            const pdf = (id: string, withCookie = cookie) =>
+                request(app)
+                    .get(`/palm/readings/${id}/pdf`)
+                    .set("Cookie", [withCookie])
+                    .responseType("blob")
+
+            it("downloads the reading as a PDF with its photo", async () => {
+                const id = (
+                    (await read({}, PNG, "image/png")).body as { id: string }
+                ).id
+                const doc = await PalmReadingModel.findById(id)
+                const date = doc?.createdAt.toISOString().slice(0, 10) ?? ""
+
+                const response = await pdf(id)
+                expect(response.statusCode).toBe(200)
+                expect(response.headers["content-type"]).toBe("application/pdf")
+                expect(response.headers["content-disposition"]).toBe(
+                    `attachment; filename="astromeridian-palm-reading-asha-rao-${date}.pdf"`,
+                )
+                expect(response.headers["cache-control"]).toBe(
+                    "private, no-store",
+                )
+                const body = response.body as Buffer
+                expect(body.subarray(0, 4).toString()).toBe("%PDF")
+                expect(body.toString("latin1")).toContain("/Subtype /Image")
+                expect(
+                    s3Calls.filter((c) => c.name === "GetObjectCommand"),
+                ).toHaveLength(1)
+            })
+
+            it("still renders, without photos, when they cannot be fetched or read", async () => {
+                // the default JPEG is only a header, so pdfkit cannot read it either
+                const unreadable = await saved(cookie, "Mira Shah")
+                expect((await pdf(unreadable)).statusCode).toBe(200)
+
+                s3Fail = "GetObjectCommand"
+                const response = await pdf(await saved())
+                expect(response.statusCode).toBe(200)
+                const body = response.body as Buffer
+                expect(body.subarray(0, 4).toString()).toBe("%PDF")
+                expect(body.toString("latin1")).not.toContain("/Subtype /Image")
+            })
+
+            it("answers 404 for another user's reading and 400 for a bad id", async () => {
+                const id = await saved()
+                const other = await registerAndGetCookie(app, {
+                    ...userData,
+                    email: "other@gmail.com",
+                })
+                expect((await pdf(id, other)).statusCode).toBe(404)
+                expect((await pdf("nope")).statusCode).toBe(400)
+            })
         })
 
         it("deletes a reading and its photos", async () => {

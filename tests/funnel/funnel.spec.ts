@@ -1,6 +1,5 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
@@ -8,7 +7,7 @@ import { UserModel } from "../../src/models/User.ts"
 import { ProfileModel } from "../../src/models/Profile.ts"
 import { LandingPageHookModel } from "../../src/models/LandingPageHook.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
-import { geoData, profileData, userData } from "../utils/index.ts"
+import { geoData, profileData, resetDB, userData } from "../utils/index.ts"
 
 // no password: the funnel never asks for one
 const signupBody = {
@@ -36,7 +35,7 @@ describe("funnel", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
     })
 

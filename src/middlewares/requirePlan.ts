@@ -3,7 +3,7 @@ import createHttpError from "http-errors"
 import type { AuthRequest } from "../types/index.ts"
 import { UserModel } from "../models/User.ts"
 import { ProfileModel } from "../models/Profile.ts"
-import { INCLUDED_PROFILES } from "../constants/billing.ts"
+import { catalog } from "../services/CatalogService.ts"
 import { isEntitled } from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { config } from "../config/index.ts"
@@ -48,12 +48,12 @@ export async function requireProfileSlot(
     }
     const userId = getAuthUserId(req)
     const [user, used] = await Promise.all([
-        UserModel.findById(userId).select("billing.profiles"),
+        UserModel.findById(userId).select("billing.plan.tier billing.profiles"),
         ProfileModel.countDocuments({ user: userId }),
     ])
     const slots = user?.billing?.profiles
     const allowed =
-        INCLUDED_PROFILES +
+        (await catalog.includedProfiles(user?.billing?.plan?.tier)) +
         (isEntitled(slots?.status) ? (slots?.quantity ?? 0) : 0)
     if (used >= allowed) {
         next(

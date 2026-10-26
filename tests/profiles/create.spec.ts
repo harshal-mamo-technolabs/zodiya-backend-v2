@@ -1,6 +1,5 @@
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
@@ -8,7 +7,12 @@ import { ProfileModel } from "../../src/models/Profile.ts"
 import { UserModel } from "../../src/models/User.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { Relationships, ZodiacSigns } from "../../src/constants/index.ts"
-import { geoData, profileData, registerAndGetCookie } from "../utils/index.ts"
+import {
+    geoData,
+    profileData,
+    registerAndGetCookie,
+    resetDB,
+} from "../utils/index.ts"
 
 describe("POST /profiles", () => {
     let mongod: MongoMemoryServer
@@ -21,7 +25,7 @@ describe("POST /profiles", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         lookup = jest
             .spyOn(GeoService.prototype, "lookup")
             .mockResolvedValue(geoData)

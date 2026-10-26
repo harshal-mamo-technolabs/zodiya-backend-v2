@@ -1,12 +1,11 @@
 import { createHmac } from "crypto"
 import { jest } from "@jest/globals"
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { config } from "../../src/config/index.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
-import { registerAndGetCookie, userData } from "../utils/index.ts"
+import { registerAndGetCookie, resetDB, userData } from "../utils/index.ts"
 
 describe("GET /helpscout/signature", () => {
     let mongod: MongoMemoryServer
@@ -18,7 +17,7 @@ describe("GET /helpscout/signature", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.replaceProperty(config, "HELPSCOUT_SECURE_MODE_KEY", "hs-test-key")
         // support is for everyone signed in, paying or not
         cookie = await registerAndGetCookie(app, userData, false)

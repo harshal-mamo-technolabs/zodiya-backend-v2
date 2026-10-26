@@ -8,6 +8,7 @@ import type {
 import type { User } from "../models/User.ts"
 import type { ElevenLabsService } from "./ElevenLabsService.ts"
 import { minutesLeft, type BillingService } from "./BillingService.ts"
+import { klaviyo } from "./KlaviyoService.ts"
 
 // a signed URL dies after 15 minutes; past this nobody can still connect
 const NEVER_CONNECTED_MS = 20 * 60 * 1000
@@ -128,6 +129,7 @@ export class AstrologerUsageService {
         )
         if (claimed && seconds > 0) {
             await this.billing.debit(session.user, seconds)
+            void klaviyo.account(session.user)
         }
         session.settled = true
         return true

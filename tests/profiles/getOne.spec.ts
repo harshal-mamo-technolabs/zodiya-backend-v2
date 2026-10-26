@@ -10,6 +10,7 @@ import {
     geoData,
     profileData,
     registerAndGetCookie,
+    resetDB,
     userData,
 } from "../utils/index.ts"
 
@@ -24,7 +25,7 @@ describe("GET /profiles/:id", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         jest.spyOn(GeoService.prototype, "lookup").mockResolvedValue(geoData)
         cookie = await registerAndGetCookie(app)
 

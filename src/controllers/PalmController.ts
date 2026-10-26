@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto"
+import { klaviyo } from "../services/KlaviyoService.ts"
 import { type NextFunction, type Response } from "express"
 import { validationResult } from "express-validator"
 import createHttpError from "http-errors"
@@ -15,8 +16,14 @@ import {
     type PalmReportService,
 } from "../services/PalmReportService.ts"
 import type { PalmImageService } from "../services/PalmImageService.ts"
+import type {
+    BillingService,
+    PalmBucket,
+    PalmLeft,
+} from "../services/BillingService.ts"
 import type { ProfileService } from "../services/ProfileService.ts"
 import { palmPrefix, type StorageService } from "../services/StorageService.ts"
+import { palmPdf, slug } from "../services/PalmPdfService.ts"
 import type { PalmReading, PalmReadingModel } from "../models/PalmReading.ts"
 import { getAuthUserId } from "../utils/index.ts"
 
@@ -46,6 +53,8 @@ const notFound = () =>
         code: "reading_not_found",
     })
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
 export default class PalmController {
     constructor(
         private reports: PalmReportService,
@@ -53,6 +62,7 @@ export default class PalmController {
         private storage: StorageService,
         private profiles: ProfileService,
         private readings: typeof PalmReadingModel,
+        private billing: BillingService,
         private logger: Logger,
     ) {}
 
@@ -79,7 +89,9 @@ export default class PalmController {
     /**
      * OpenAI reads the photo and writes the report; it also turns away photos
      * with no clear palm (those are never stored). A good reading is saved with
-     * its photo; if saving fails the user still gets the reading.
+     * its photo; if saving fails the user still gets the reading. With
+     * payments on, each reading spends one palm credit, reserved before OpenAI
+     * is called and given back if no reading comes of it.
      */
     async read(req: AuthRequest, res: Response, next: NextFunction) {
         if (this.invalid(req, res)) {
@@ -88,6 +100,8 @@ export default class PalmController {
 
         const started = Date.now()
         const userId = getAuthUserId(req)
+        // the credit held for this reading until it is delivered
+        let held: PalmBucket | null = null
         try {
             // the upload middleware has checked its type and size
             const photo = req.file
@@ -139,6 +153,50 @@ export default class PalmController {
                 }
             }
 
+            // a hand is read once per person: the saved reading is opened
+            // instead, and deleting it is how that hand gets read again
+            const existing = await this.readings
+                .findOne({
+                    user: userId,
+                    hand: body.hand,
+                    "subject.kind": subject.kind,
+                    ...(subject.kind === "profile"
+                        ? { "subject.profile": subject.profile ?? null }
+                        : {
+                              "subject.name": new RegExp(
+                                  `^${escapeRegExp(subject.name.trim())}$`,
+                                  "i",
+                              ),
+                          }),
+                })
+                .select("_id")
+            if (existing) {
+                res.status(409).json({
+                    errors: [
+                        {
+                            msg: "This hand has already been read. Open the saved reading, or delete it to read this hand again.",
+                            code: "hand_already_read",
+                            readingId: String(existing._id),
+                        },
+                    ],
+                })
+                return
+            }
+
+            if (config.PAYMENTS_ENABLED) {
+                held = await this.billing.reservePalm(userId)
+                if (!held) {
+                    next(
+                        createHttpError(
+                            402,
+                            "You've used all your palm readings. Get more to keep reading.",
+                            { code: "palm_credits_exhausted" },
+                        ),
+                    )
+                    return
+                }
+            }
+
             const report = await this.reports.write({
                 photo,
                 hand: body.hand,
@@ -164,6 +222,8 @@ export default class PalmController {
                     problem,
                     photo: report.photo,
                 })
+                await this.refund(userId, held)
+                held = null
                 next(
                     createHttpError(
                         422,
@@ -175,6 +235,13 @@ export default class PalmController {
                 )
                 return
             }
+
+            // delivered from here on, saved or not: the credit is spent
+            held = null
+            void klaviyo.account(userId)
+            const credits: PalmLeft | null = config.PAYMENTS_ENABLED
+                ? await this.billing.palmCredits(userId)
+                : null
 
             const reading = {
                 hand: body.hand,
@@ -216,6 +283,7 @@ export default class PalmController {
                         highlighted: null,
                     },
                     saved: true,
+                    credits,
                 })
             } catch (e) {
                 // the reading was paid for: hand it over even though it is not kept
@@ -229,6 +297,7 @@ export default class PalmController {
                     createdAt: new Date().toISOString(),
                     images: { original: null, highlighted: null },
                     saved: false,
+                    credits,
                 })
             }
         } catch (e) {
@@ -239,8 +308,22 @@ export default class PalmController {
                 upstream,
                 totalMs: Date.now() - started,
             })
+            await this.refund(userId, held)
             next(e)
         }
+    }
+
+    private async refund(userId: string, held: PalmBucket | null) {
+        if (!held) {
+            return
+        }
+        await this.billing.refundPalm(userId, held).catch((e: unknown) => {
+            this.logger.error("Palm credit not refunded", {
+                userId,
+                bucket: held,
+                error: (e as Error).message,
+            })
+        })
     }
 
     /** The saved photo redrawn with its lines highlighted; drawn once, then reused. */
@@ -396,6 +479,59 @@ export default class PalmController {
                 },
                 highlight: { state: d.highlight?.state ?? "none" },
             })
+        } catch (e) {
+            next(e)
+        }
+    }
+
+    /** The saved reading as a PDF download; a photo that cannot be fetched is left out. */
+    async pdf(req: AuthRequest, res: Response, next: NextFunction) {
+        if (this.invalid(req, res)) {
+            return
+        }
+        try {
+            const d = await this.find(req)
+            if (!d) {
+                next(notFound())
+                return
+            }
+            const fetch = async (key: string | null | undefined) => {
+                if (!key) {
+                    return null
+                }
+                try {
+                    return await this.storage.get(key)
+                } catch (e) {
+                    this.logger.warn("Palm PDF photo not fetched", {
+                        readingId: String(d._id),
+                        error: (e as Error).message,
+                    })
+                    return null
+                }
+            }
+            const [original, highlighted] = await Promise.all([
+                fetch(d.images?.original),
+                fetch(d.images?.highlighted),
+            ])
+            const name = d.subject?.name ?? ""
+            const pdf = await palmPdf(
+                {
+                    lang: d.lang,
+                    hand: d.hand,
+                    createdAt: d.createdAt,
+                    subject: { name },
+                    report: d.report as PalmReport,
+                },
+                { original, highlighted },
+            )
+            const date = d.createdAt.toISOString().slice(0, 10)
+            res.status(200)
+                .set({
+                    "Content-Type": "application/pdf",
+                    "Content-Disposition": `attachment; filename="astromeridian-palm-reading-${slug(name)}-${date}.pdf"`,
+                    "Cache-Control": "private, no-store",
+                })
+                .send(pdf)
         } catch (e) {
             next(e)
         }

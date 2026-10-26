@@ -5,7 +5,6 @@ import {
     Schema,
 } from "mongoose"
 import { Roles } from "../constants/index.ts"
-import { PLAN_TIERS } from "../constants/billing.ts"
 
 export const GENDERS = ["female", "male"] as const
 
@@ -48,7 +47,8 @@ const userSchema = new Schema(
             trialUsed: { type: Boolean, default: false },
             plan: {
                 subscriptionId: String,
-                tier: { type: String, enum: PLAN_TIERS },
+                // a Plan tier from the billing catalog
+                tier: String,
                 // a Stripe subscription status
                 status: String,
                 currentPeriodEnd: Date,
@@ -65,6 +65,15 @@ const userSchema = new Schema(
                 allowance: { type: Number, default: 0 },
                 used: { type: Number, default: 0 },
                 topup: { type: Number, default: 0 },
+                // every top-up ever bought, for reporting
+                purchased: { type: Number, default: 0 },
+            },
+            // palm readings, counted like minutes but in readings
+            palm: {
+                allowance: { type: Number, default: 0 },
+                used: { type: Number, default: 0 },
+                topup: { type: Number, default: 0 },
+                purchased: { type: Number, default: 0 },
             },
         },
     },

@@ -1,5 +1,4 @@
 import request from "supertest"
-import mongoose from "mongoose"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
@@ -12,7 +11,7 @@ import {
     TarotSuits,
 } from "../../src/constants/index.ts"
 import type { TarotDrawResponse } from "../../src/types/index.ts"
-import { registerAndGetCookie } from "../utils/index.ts"
+import { registerAndGetCookie, resetDB } from "../utils/index.ts"
 
 const tarot = new TarotService()
 
@@ -176,7 +175,7 @@ describe("POST /tarot/draw", () => {
     })
 
     beforeEach(async () => {
-        await mongoose.connection.dropDatabase()
+        await resetDB()
         cookie = await registerAndGetCookie(app)
     })
 

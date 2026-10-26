@@ -1,4 +1,7 @@
 import express from "express"
+import { ipKeyGenerator, rateLimit } from "express-rate-limit"
+import { config } from "../config/index.ts"
+import type { AuthRequest } from "../types/index.ts"
 import ProfileController from "../controllers/ProfileController.ts"
 import { ProfileService } from "../services/ProfileService.ts"
 import { GeoService } from "../services/GeoService.ts"
@@ -49,6 +52,20 @@ const transitController = new TransitController(
     logger,
 )
 
+// rendering a PDF is CPU work, so keep it to a sane number per hour
+const pdfs = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 30,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    keyGenerator: (req) =>
+        (req as AuthRequest).auth?.sub ?? ipKeyGenerator(req.ip ?? ""),
+    skip: () => config.NODE_ENV === "test",
+    message: {
+        errors: [{ msg: "Too many PDF downloads. Try again in an hour." }],
+    },
+})
+
 router.post(
     "/",
     authenticate,
@@ -91,6 +108,15 @@ router.get(
     requirePlan,
     chartValidator,
     profileController.getChart.bind(profileController),
+)
+
+router.get(
+    "/:id/chart/pdf",
+    authenticate,
+    requirePlan,
+    pdfs,
+    chartValidator,
+    profileController.chartPdf.bind(profileController),
 )
 
 router.get(
