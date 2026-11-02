@@ -104,3 +104,35 @@ export const syncValidator = checkSchema(
     },
     ["body"],
 )
+
+// Stripe holds a metadata value up to 500 characters
+export const cancelPlanValidator = checkSchema(
+    {
+        reason: {
+            isString: { errorMessage: "Tell us why you are cancelling" },
+            trim: true,
+            isLength: {
+                options: { min: 1, max: 500 },
+                errorMessage: "The reason should be 1 to 500 characters",
+            },
+        },
+        stayIfOffered: {
+            optional: true,
+            isArray: { errorMessage: "stayIfOffered should be a list" },
+            custom: {
+                options: (value: unknown[]) => {
+                    if (
+                        !value.every((v) => typeof v === "string" && v.trim())
+                    ) {
+                        throw new Error("stayIfOffered should list text only")
+                    }
+                    if (value.join(", ").length > 500) {
+                        throw new Error("stayIfOffered is too long")
+                    }
+                    return true
+                },
+            },
+        },
+    },
+    ["body"],
+)

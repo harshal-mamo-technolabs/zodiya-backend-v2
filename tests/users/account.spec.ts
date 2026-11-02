@@ -5,6 +5,7 @@ import app from "../../src/app.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { stripe } from "../../src/services/BillingService.ts"
+import { KlaviyoEvents, klaviyo } from "../../src/services/KlaviyoService.ts"
 import { UserModel } from "../../src/models/User.ts"
 import { ProfileModel } from "../../src/models/Profile.ts"
 import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
@@ -173,27 +174,127 @@ describe("account", () => {
         expect(response.statusCode).toBe(404)
     })
 
-    it("DELETE /auth/me removes the account, its profiles and its sessions", async () => {
-        const del = jest
-            .spyOn(stripe.customers, "del")
-            .mockResolvedValue({} as never)
-        expect(await RefreshTokenModel.countDocuments()).toBe(1)
-        const response = await request(app)
-            .delete("/auth/me")
-            .set("Cookie", [cookie])
-        expect(response.statusCode).toBe(204)
-        // deleting the Stripe customer is what cancels its subscriptions
-        expect(del).toHaveBeenCalledWith("cus_test_harshal@gmail.com")
-        const cleared = (
-            response.headers as unknown as { "set-cookie": string[] }
-        )["set-cookie"].join(" ")
-        expect(cleared).toMatch(/accessToken=;/)
-        expect(await UserModel.countDocuments()).toBe(0)
-        expect(await ProfileModel.countDocuments()).toBe(0)
-        expect(await RefreshTokenModel.countDocuments()).toBe(0)
+    describe("DELETE /auth/me", () => {
+        const del = () =>
+            request(app).delete("/auth/me").set("Cookie", [cookie])
+        // the test account renews a plan and a profile pack; both cancelled
+        const cancelAll = () =>
+            UserModel.updateOne(
+                { email: userData.email },
+                {
+                    $set: {
+                        "billing.plan.cancelAtPeriodEnd": true,
+                        "billing.plan.currentPeriodEnd": new Date(
+                            1_900_000_000_000,
+                        ),
+                        "billing.profiles.cancelAtPeriodEnd": true,
+                    },
+                },
+            )
 
-        const after = await request(app).get("/auth/me").set("Cookie", [cookie])
-        expect(after.statusCode).toBe(404)
+        it("refuses while a plan or profile pack still renews", async () => {
+            const response = await del()
+            expect(response.statusCode).toBe(409)
+            expect(response.body).toMatchObject({
+                errors: [{ code: "subscriptions_active" }],
+            })
+
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.plan.cancelAtPeriodEnd": true } },
+            )
+            expect((await del()).statusCode).toBe(409)
+            const user = await UserModel.findOne({ email: userData.email })
+            expect(user?.deletedAt).toBeNull()
+        })
+
+        it("closes the account but keeps everything in it", async () => {
+            await cancelAll()
+            const track = jest.spyOn(klaviyo, "track")
+            const customers = jest.spyOn(stripe.customers, "del")
+
+            const response = await del()
+            expect(response.statusCode).toBe(204)
+            const cleared = (
+                response.headers as unknown as { "set-cookie": string[] }
+            )["set-cookie"].join(" ")
+            expect(cleared).toMatch(/accessToken=;/)
+
+            const user = await UserModel.findOne({ email: userData.email })
+            expect(user?.deletedAt).toBeInstanceOf(Date)
+            expect(await ProfileModel.countDocuments()).toBe(2)
+            expect(await RefreshTokenModel.countDocuments()).toBe(0)
+            // nothing in Stripe is touched; the plans were cancelled already
+            expect(customers).not.toHaveBeenCalled()
+            const [, email, props, , eventProps] =
+                track.mock.calls.find(
+                    (c) => c[0] === KlaviyoEvents.ACCOUNT_DELETED,
+                ) ?? []
+            expect(email).toBe(userData.email)
+            expect(props).toMatchObject({
+                "astromeridian:is_user_deleted": true,
+                "astromeridian:account_deleted_at":
+                    user?.deletedAt?.toISOString(),
+            })
+            expect(eventProps).toEqual({
+                "astromeridian:plan_status": "active",
+                "astromeridian:plan_access_ends_at": new Date(
+                    1_900_000_000_000,
+                ).toISOString(),
+            })
+
+            // the access token still in hand no longer opens anything
+            const after = await request(app)
+                .get("/auth/me")
+                .set("Cookie", [cookie])
+            expect(after.statusCode).toBe(401)
+            expect(after.body).toMatchObject({
+                errors: [{ code: "account_deleted" }],
+            })
+            expect((await del()).statusCode).toBe(401)
+        })
+
+        it("opens the account again on the next login", async () => {
+            await cancelAll()
+            await del()
+            const track = jest.spyOn(klaviyo, "track")
+
+            const login = await request(app)
+                .post("/auth/login")
+                .send({ email: userData.email, password: userData.password })
+            expect(login.statusCode).toBe(200)
+            const body = login.body as {
+                restored?: boolean
+                deletedAt?: string
+            }
+            expect(body.restored).toBe(true)
+            expect(typeof body.deletedAt).toBe("string")
+            const user = await UserModel.findOne({ email: userData.email })
+            expect(user?.deletedAt).toBeNull()
+            const restored = track.mock.calls.find(
+                (c) => c[0] === KlaviyoEvents.ACCOUNT_RESTORED,
+            )
+            expect(restored?.[2]).toMatchObject({
+                "astromeridian:is_user_deleted": false,
+                "astromeridian:account_deleted_at": null,
+            })
+
+            const fresh = (
+                login.headers as unknown as { "set-cookie": string[] }
+            )["set-cookie"]
+                .find((c) => c.startsWith("accessToken="))
+                ?.split(";")[0]
+            const me = await request(app)
+                .get("/auth/me")
+                .set("Cookie", [fresh ?? ""])
+            expect(me.statusCode).toBe(200)
+
+            // only the login that reopens it says so
+            const again = await request(app)
+                .post("/auth/login")
+                .send({ email: userData.email, password: userData.password })
+            expect(again.body).not.toHaveProperty("restored")
+        })
     })
 
     it("requires a session", async () => {

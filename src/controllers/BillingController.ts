@@ -46,14 +46,37 @@ export default class BillingController {
     }
 
     async cancel(req: AuthRequest, res: Response, next: NextFunction) {
-        await this.run(req, res, next, (userId) =>
-            this.billing.setCancelAtPeriodEnd(userId, true),
-        )
+        const { reason, stayIfOffered } = req.body as {
+            reason: string
+            stayIfOffered?: string[]
+        }
+        await this.run(req, res, next, async (userId) => {
+            const step = await this.billing.cancelPlan(userId, {
+                reason,
+                stayIfOffered: [
+                    ...new Set((stayIfOffered ?? []).map((s) => s.trim())),
+                ],
+            })
+            this.logger.info("Plan cancelled", { userId, reason })
+            return step
+        })
     }
 
     async resume(req: AuthRequest, res: Response, next: NextFunction) {
         await this.run(req, res, next, (userId) =>
-            this.billing.setCancelAtPeriodEnd(userId, false),
+            this.billing.resumePlan(userId),
+        )
+    }
+
+    async cancelProfiles(req: AuthRequest, res: Response, next: NextFunction) {
+        await this.run(req, res, next, (userId) =>
+            this.billing.setProfilesCancelAtPeriodEnd(userId, true),
+        )
+    }
+
+    async resumeProfiles(req: AuthRequest, res: Response, next: NextFunction) {
+        await this.run(req, res, next, (userId) =>
+            this.billing.setProfilesCancelAtPeriodEnd(userId, false),
         )
     }
 

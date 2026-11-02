@@ -1,5 +1,5 @@
 import { type NextFunction, type Request, type Response } from "express"
-import { klaviyo } from "../services/KlaviyoService.ts"
+import { KlaviyoEvents, klaviyo } from "../services/KlaviyoService.ts"
 import { validationResult } from "express-validator"
 import createHttpError from "http-errors"
 import type { Logger } from "winston"
@@ -15,7 +15,7 @@ import type { UserDocument } from "../models/User.ts"
 import type { UserService } from "../services/UserService.ts"
 import { tokenPayload, type TokenService } from "../services/TokenService.ts"
 import type { CredentialService } from "../services/CredentialService.ts"
-import type { BillingService } from "../services/BillingService.ts"
+import { isEntitled } from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { config } from "../config/index.ts"
 
@@ -33,7 +33,6 @@ export default class AuthController {
         private tokenService: TokenService,
         private credentialService: CredentialService,
         private logger: Logger,
-        private billing?: BillingService,
     ) {}
 
     async register(
@@ -121,12 +120,33 @@ export default class AuthController {
                 return
             }
 
+            if (user.deletedAt) {
+                await this.userService.restore(String(user._id))
+                await klaviyo.account(
+                    user._id,
+                    {},
+                    {
+                        metric: KlaviyoEvents.ACCOUNT_RESTORED,
+                        properties: {
+                            "astromeridian:deleted_at":
+                                user.deletedAt.toISOString(),
+                        },
+                    },
+                )
+                this.logger.info("Deleted account restored", { id: user._id })
+            }
+
             this.logger.info("User has been logged in", { id: user._id })
 
             await this.setAuthCookies(res, user)
 
             res.status(200).json({
                 id: user._id,
+                // so the app can explain what reopening the account means
+                ...(user.deletedAt && {
+                    restored: true,
+                    deletedAt: user.deletedAt.toISOString(),
+                }),
             })
         } catch (e) {
             next(e)
@@ -181,16 +201,56 @@ export default class AuthController {
     }
 
     /** Deletes the account and everything it owns, then ends the session. */
+    /**
+     * A soft delete: the account is closed and signed out everywhere, but
+     * nothing is removed, so logging in again brings it back. Anything still
+     * renewing has to be cancelled first, so a closed account is never charged.
+     */
     async remove(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const id = getAuthUserId(req)
-            // before the account goes, so nothing keeps charging a deleted user
-            await this.billing?.closeCustomer(id)
-            const gone = await this.userService.remove(id)
-            if (!gone) {
+            const b = (await this.userService.findById(id))?.billing
+            const renews = (
+                s?: {
+                    status?: string | null
+                    cancelAtPeriodEnd?: boolean | null
+                } | null,
+            ) => isEntitled(s?.status) && !s?.cancelAtPeriodEnd
+            if (
+                config.PAYMENTS_ENABLED &&
+                (renews(b?.plan) ||
+                    (b?.profiles?.quantity && renews(b.profiles)))
+            ) {
+                next(
+                    createHttpError(
+                        409,
+                        "Cancel your plans before deleting your account.",
+                        { code: "subscriptions_active" },
+                    ),
+                )
+                return
+            }
+            const user = await this.userService.softDelete(id)
+            if (!user) {
                 next(createHttpError(404, "Account does not exist"))
                 return
             }
+            await klaviyo.account(
+                user._id,
+                {},
+                {
+                    metric: KlaviyoEvents.ACCOUNT_DELETED,
+                    properties: {
+                        "astromeridian:plan_status": b?.plan?.status ?? null,
+                        "astromeridian:plan_access_ends_at": isEntitled(
+                            b?.plan?.status,
+                        )
+                            ? (b?.plan?.currentPeriodEnd?.toISOString() ?? null)
+                            : null,
+                    },
+                    uniqueId: `account_deleted:${id}:${String(user.deletedAt?.getTime())}`,
+                },
+            )
             this.logger.info("Account deleted", { id })
             res.clearCookie("accessToken", COOKIE_OPTIONS)
             res.clearCookie("refreshToken", COOKIE_OPTIONS)
@@ -291,7 +351,8 @@ export default class AuthController {
                     ? await this.tokenService.consumeHandoffToken(token)
                     : null
             const user = userId ? await this.userService.findById(userId) : null
-            if (!user) {
+            // a deleted account comes back through the login, not a link
+            if (!user || user.deletedAt) {
                 next(
                     createHttpError(
                         401,

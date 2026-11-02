@@ -10,6 +10,7 @@ import { BillingGrantModel } from "../../src/models/BillingGrant.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { BillingService, stripe } from "../../src/services/BillingService.ts"
 import { catalog, type Plan } from "../../src/services/CatalogService.ts"
+import { KlaviyoEvents, klaviyo } from "../../src/services/KlaviyoService.ts"
 import {
     geoData,
     profileData,
@@ -390,6 +391,121 @@ describe("billing", () => {
             )
             expect((await choose("profiles_3")).statusCode).toBe(409)
             expect((await choose("profiles_99")).statusCode).toBe(400)
+        })
+    })
+
+    describe("cancelling", () => {
+        let cookie: string
+        let update: jest.SpiedFunction<typeof stripe.subscriptions.update>
+        const survey = {
+            reason: "Too expensive.",
+            stayIfOffered: [
+                "Lower-cost subscription",
+                "Annual discounted rates",
+            ],
+        }
+        const post = (path: string, body: object = {}) =>
+            request(app).post(path).set("Cookie", [cookie]).send(body)
+        const mirror = async () =>
+            (await UserModel.findOne({ email: userData.email }))?.billing
+
+        beforeEach(async () => {
+            cookie = await registerAndGetCookie(app)
+            // Stripe hands back the subscription as the update leaves it
+            update = jest
+                .spyOn(stripe.subscriptions, "update")
+                .mockImplementation(((
+                    id: string,
+                    params: Stripe.SubscriptionUpdateParams,
+                ) =>
+                    Promise.resolve(
+                        subscription({
+                            id,
+                            cancel_at_period_end: !!params.cancel_at_period_end,
+                            metadata: {
+                                kind:
+                                    id === "sub_test_plan"
+                                        ? "plan"
+                                        : "profiles",
+                                ...(params.metadata as Record<string, string>),
+                            },
+                        }),
+                    )) as never)
+        })
+
+        it("asks for extra profiles to be cancelled before the plan", async () => {
+            const res = await post("/billing/plan/cancel", survey)
+            expect(res.status).toBe(409)
+            expect(res.body).toMatchObject({
+                errors: [{ code: "profiles_active" }],
+            })
+            expect(update).not.toHaveBeenCalled()
+        })
+
+        it("needs a reason to cancel the plan", async () => {
+            const res = await post("/billing/plan/cancel", {
+                stayIfOffered: [],
+            })
+            expect(res.status).toBe(400)
+        })
+
+        it("cancels extra profiles alone, then the plan with the survey", async () => {
+            const track = jest.spyOn(klaviyo, "track")
+
+            const profiles = await post("/billing/profiles/cancel")
+            expect(profiles.status).toBe(200)
+            expect(update).toHaveBeenCalledTimes(1)
+            expect(update).toHaveBeenCalledWith("sub_test_profiles", {
+                cancel_at_period_end: true,
+            })
+            expect((await mirror())?.profiles?.cancelAtPeriodEnd).toBe(true)
+            expect((await mirror())?.plan?.cancelAtPeriodEnd).toBe(false)
+
+            const plan = await post("/billing/plan/cancel", survey)
+            expect(plan.status).toBe(200)
+            expect(update).toHaveBeenLastCalledWith("sub_test_plan", {
+                cancel_at_period_end: true,
+                metadata: {
+                    cancel_reason: "Too expensive.",
+                    stay_if_offered:
+                        "Lower-cost subscription, Annual discounted rates",
+                },
+            })
+            expect((await mirror())?.plan?.cancelAtPeriodEnd).toBe(true)
+            expect(track.mock.calls.map((c) => c[0])).toEqual([
+                KlaviyoEvents.PROFILE_PLAN_CANCEL_REQUESTED,
+                KlaviyoEvents.GENERAL_PLAN_CANCEL_REQUESTED,
+            ])
+            expect(track.mock.calls[1]?.[2]).toMatchObject({
+                "astromeridian:general_plan_cancels_at_period_end": true,
+                "astromeridian:general_plan_cancel_reason": "Too expensive.",
+                "astromeridian:general_plan_would_have_stayed_if_offered":
+                    "Lower-cost subscription, Annual discounted rates",
+            })
+            expect(track.mock.calls[1]?.[4]).toMatchObject({
+                "astromeridian:cancel_reason": "Too expensive.",
+                "astromeridian:would_have_stayed_if_offered":
+                    "Lower-cost subscription, Annual discounted rates",
+            })
+
+            // extra profiles cannot come back while the plan is ending
+            const back = await post("/billing/profiles/resume")
+            expect(back.status).toBe(409)
+            expect(back.body).toMatchObject({
+                errors: [{ code: "plan_ending" }],
+            })
+
+            // keeping the plan clears the survey and leaves the profiles cancelled
+            await post("/billing/plan/resume")
+            expect(update).toHaveBeenLastCalledWith("sub_test_plan", {
+                cancel_at_period_end: false,
+                metadata: { cancel_reason: "", stay_if_offered: "" },
+            })
+            expect((await mirror())?.plan?.cancelAtPeriodEnd).toBe(false)
+            expect((await mirror())?.profiles?.cancelAtPeriodEnd).toBe(true)
+            expect(track.mock.calls.at(-1)?.[0]).toBe(
+                KlaviyoEvents.GENERAL_PLAN_RESUMED,
+            )
         })
     })
 

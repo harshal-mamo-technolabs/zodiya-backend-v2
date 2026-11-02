@@ -24,9 +24,19 @@ export const KlaviyoEvents = {
     PAYMENT_COMPLETED: "ASTROMERIDIAN:LANDING_PAGE_PAYMENT_COMPLETED",
     PROFILE_PLAN_PURCHASED: "ASTROMERIDIAN:PROFILE_PLAN_PURCHASED",
     PROFILE_PLAN_CHANGED: "ASTROMERIDIAN:PROFILE_PLAN_CHANGED",
+    // *_CANCEL_REQUESTED: stops renewing, still live; *_CANCELLED: ended
+    PROFILE_PLAN_CANCEL_REQUESTED:
+        "ASTROMERIDIAN:PROFILE_PLAN_CANCEL_REQUESTED",
+    PROFILE_PLAN_RESUMED: "ASTROMERIDIAN:PROFILE_PLAN_RESUMED",
     PROFILE_PLAN_CANCELLED: "ASTROMERIDIAN:PROFILE_PLAN_CANCELLED",
+    GENERAL_PLAN_CANCEL_REQUESTED:
+        "ASTROMERIDIAN:GENERAL_PLAN_CANCEL_REQUESTED",
+    GENERAL_PLAN_RESUMED: "ASTROMERIDIAN:GENERAL_PLAN_RESUMED",
+    GENERAL_PLAN_CANCELLED: "ASTROMERIDIAN:GENERAL_PLAN_CANCELLED",
     ASTROLOGER_CREDITS_PURCHASED: "ASTROMERIDIAN:ASTROLOGER_CREDITS_PURCHASED",
     PALM_READINGS_PURCHASED: "ASTROMERIDIAN:PALM_READINGS_PURCHASED",
+    ACCOUNT_DELETED: "ASTROMERIDIAN:ACCOUNT_DELETED",
+    ACCOUNT_RESTORED: "ASTROMERIDIAN:ACCOUNT_RESTORED",
 } as const
 
 export type Props = Record<string, string | number | boolean | null>
@@ -117,6 +127,11 @@ export function planProfile(sub: Stripe.Subscription, plan: Plan): Props {
         "astromeridian:general_plan_trial_end_date": iso(sub.trial_end),
         "astromeridian:general_plan_next_billing_date":
             cancelling || ended ? null : iso(item?.current_period_end),
+        // the cancellation survey; cleared when they keep the plan
+        "astromeridian:general_plan_cancel_reason":
+            sub.metadata.cancel_reason ?? null,
+        "astromeridian:general_plan_would_have_stayed_if_offered":
+            sub.metadata.stay_if_offered ?? null,
     }
 }
 
@@ -158,6 +173,10 @@ function accountProfile(user: UserDocument): Props {
         "astromeridian:utm_source": user.utm_source || "default",
         "astromeridian:utm_campaign": user.utm_campaign || "default",
         "astromeridian:utm_medium": user.utm_medium || "default",
+        // a soft delete, so every later sync still says so; cleared on restore
+        "astromeridian:is_user_deleted": !!user.deletedAt,
+        "astromeridian:account_deleted_at":
+            user.deletedAt?.toISOString() ?? null,
         "astromeridian:created_at": user.createdAt.toISOString(),
     }
 }

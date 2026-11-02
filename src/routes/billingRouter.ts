@@ -8,6 +8,7 @@ import logger from "../config/logger.ts"
 import authenticate from "../middlewares/authenticate.ts"
 import requirePlan, { requirePayments } from "../middlewares/requirePlan.ts"
 import {
+    cancelPlanValidator,
     changePlanValidator,
     minutesValidator,
     palmValidator,
@@ -83,6 +84,7 @@ router.post(
     authenticate,
     requirePayments,
     requirePlan,
+    cancelPlanValidator,
     controller.cancel.bind(controller),
 )
 router.post(
@@ -99,6 +101,20 @@ router.post(
     requirePlan,
     profilePackValidator,
     controller.chooseProfilePack.bind(controller),
+)
+router.post(
+    "/profiles/cancel",
+    authenticate,
+    requirePayments,
+    requirePlan,
+    controller.cancelProfiles.bind(controller),
+)
+router.post(
+    "/profiles/resume",
+    authenticate,
+    requirePayments,
+    requirePlan,
+    controller.resumeProfiles.bind(controller),
 )
 router.post(
     "/minutes",

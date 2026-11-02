@@ -33,6 +33,9 @@ const userSchema = new Schema(
             default: Roles.CUSTOMER,
             required: true,
         },
+        // set when the owner deletes the account; nothing is removed, and
+        // logging in again clears it
+        deletedAt: { type: Date, default: null },
         // what the account has asked to be sent, once sending exists
         notifications: {
             daily: { type: Boolean, default: true },
@@ -59,6 +62,7 @@ const userSchema = new Schema(
                 quantity: { type: Number, default: 0 },
                 status: String,
                 currentPeriodEnd: Date,
+                cancelAtPeriodEnd: { type: Boolean, default: false },
             },
             // all in seconds; plan time resets each cycle, top-ups never expire
             minutes: {

@@ -17,7 +17,6 @@ import { highlightPrompt } from "../../src/services/PalmImageService.ts"
 import { ProfileModel } from "../../src/models/Profile.ts"
 import { UserModel } from "../../src/models/User.ts"
 import { PalmReadingModel } from "../../src/models/PalmReading.ts"
-import { stripe } from "../../src/services/BillingService.ts"
 import { ageFrom } from "../../src/controllers/PalmController.ts"
 import {
     geoData,
@@ -1106,34 +1105,25 @@ describe("POST /palm/read", () => {
             expect(await PalmReadingModel.countDocuments()).toBe(0)
         })
 
-        it("removes the user's readings and photos with the account", async () => {
+        it("keeps the readings and photos when the account is deleted", async () => {
             await saved()
-            await saved()
-            jest.spyOn(stripe.customers, "del").mockResolvedValue({} as never)
+            await UserModel.updateOne(
+                { _id: userId },
+                {
+                    $set: {
+                        "billing.plan.cancelAtPeriodEnd": true,
+                        "billing.profiles.cancelAtPeriodEnd": true,
+                    },
+                },
+            )
 
             const response = await request(app)
                 .delete("/auth/me")
                 .set("Cookie", [cookie])
             expect(response.statusCode).toBe(204)
-            expect(await PalmReadingModel.countDocuments()).toBe(0)
-            expect(
-                s3Calls.find((c) => c.name === "ListObjectsV2Command")?.input
-                    .Prefix,
-            ).toBe(`meridian/palm/${userId}/`)
-            expect(bucket.size).toBe(0)
-        })
-
-        it("still removes the account when storage fails", async () => {
-            await saved()
-            s3Fail = "ListObjectsV2Command"
-            jest.spyOn(stripe.customers, "del").mockResolvedValue({} as never)
-
-            const response = await request(app)
-                .delete("/auth/me")
-                .set("Cookie", [cookie])
-            expect(response.statusCode).toBe(204)
-            expect(await UserModel.countDocuments()).toBe(0)
-            expect(await PalmReadingModel.countDocuments()).toBe(0)
+            // a soft delete: logging in again brings all of it back
+            expect(await PalmReadingModel.countDocuments()).toBe(1)
+            expect(bucket.size).toBeGreaterThan(0)
         })
     })
 })

@@ -263,21 +263,59 @@ describe("klaviyo sync", () => {
                 "2027-01-18T08:00:00.000Z",
         })
 
-        // cancelled: no next billing date
-        retrieve.mockResolvedValue(sub({ cancel_at_period_end: true }))
+        // cancelled: no next billing date, and the request is an event
+        track.mockClear() // the sign-up was tracked already
+        retrieve.mockResolvedValue(
+            sub({
+                cancel_at_period_end: true,
+                metadata: {
+                    kind: "plan",
+                    cancel_reason: "Too expensive.",
+                    stay_if_offered: "Lower-cost subscription",
+                },
+            }),
+        )
         await deliver(updated)
-        expect(identify.mock.calls[1]?.[1]).toMatchObject({
+        expect(track.mock.calls[0]?.[0]).toBe(
+            KlaviyoEvents.GENERAL_PLAN_CANCEL_REQUESTED,
+        )
+        expect(track.mock.calls[0]?.[2]).toMatchObject({
             "astromeridian:general_plan_cancels_at_period_end": true,
             "astromeridian:general_plan_next_billing_date": null,
+            "astromeridian:general_plan_cancel_reason": "Too expensive.",
+        })
+        expect(track.mock.calls[0]?.[4]).toEqual({
+            "astromeridian:plan": starter.name,
+            "astromeridian:plan_tier": starter.tier,
+            "astromeridian:access_ends_at": "2027-02-18T08:00:00.000Z",
+            "astromeridian:was_trial": false,
+            "astromeridian:cancel_reason": "Too expensive.",
+            "astromeridian:would_have_stayed_if_offered":
+                "Lower-cost subscription",
+        })
+
+        // kept after all
+        retrieve.mockResolvedValue(sub({}))
+        await deliver(updated)
+        expect(track.mock.calls[1]?.[0]).toBe(
+            KlaviyoEvents.GENERAL_PLAN_RESUMED,
+        )
+        expect(track.mock.calls[1]?.[4]).toMatchObject({
+            "astromeridian:access_ends_at": null,
+            "astromeridian:cancel_reason": null,
         })
 
         // ended
         retrieve.mockResolvedValue(sub({ status: "canceled" }))
         await deliver(updated)
-        expect(identify.mock.calls[2]?.[1]).toMatchObject({
+        expect(track.mock.calls[2]?.[0]).toBe(
+            KlaviyoEvents.GENERAL_PLAN_CANCELLED,
+        )
+        expect(track.mock.calls[2]?.[2]).toMatchObject({
             "astromeridian:general_plan_status": "canceled",
             "astromeridian:general_plan_next_billing_date": null,
         })
+        expect(track.mock.calls[2]?.[3]).toBe("general_plan_cancelled:sub_k")
     })
 
     it("syncs a direct sign-up with the 'default' campaign", async () => {

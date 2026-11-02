@@ -28,6 +28,15 @@ export const stripe = new Stripe(config.STRIPE_SECRET_KEY, {
 export const isEntitled = (status: string | null | undefined) =>
     !!status && ENTITLED_STATUSES.includes(status)
 
+/** Why a plan was cancelled, asked as it is. */
+export interface CancelSurvey {
+    reason: string
+    stayIfOffered: string[]
+}
+
+// Stripe drops a metadata key set to ""
+const NO_SURVEY = { cancel_reason: "", stay_if_offered: "" }
+
 /** What the browser needs to take a payment; null means nothing is due. */
 export interface PaymentStep {
     clientSecret: string | null
@@ -80,6 +89,7 @@ export interface BillingStatus {
         status: string | null
         /** When the pack renews; a switch is prorated against it. */
         currentPeriodEnd: string | null
+        cancelAtPeriodEnd: boolean
     }
     minutes: MinutesLeft
     palm: PalmLeft
@@ -202,6 +212,7 @@ export class BillingService {
                 status: b?.profiles?.status ?? null,
                 currentPeriodEnd:
                     b?.profiles?.currentPeriodEnd?.toISOString() ?? null,
+                cancelAtPeriodEnd: b?.profiles?.cancelAtPeriodEnd ?? false,
             },
             minutes: minutesLeft(b),
             palm: palmLeft(b),
@@ -355,6 +366,7 @@ export class BillingService {
             // a plan change is a decision to stay
             sub = await stripe.subscriptions.update(sub.id, {
                 cancel_at_period_end: false,
+                metadata: NO_SURVEY,
             })
         }
 
@@ -371,25 +383,69 @@ export class BillingService {
         return this.afterUpdate(updated, `Switch to ${next.name}`)
     }
 
-    /** Plan and extra profiles both stop at the end of the paid period. */
-    async setCancelAtPeriodEnd(userId: string, cancel: boolean) {
-        const user = await this.user(userId)
-        const b = user.billing
-        if (!b?.plan?.subscriptionId || !isEntitled(b.plan.status)) {
-            throw createHttpError(400, "There is no active plan.")
+    /**
+     * The plan stops at the end of the paid period. A profile pack cannot
+     * outlive it, so it has to be cancelled first. Why they left goes on the
+     * subscription, and from there to Klaviyo.
+     */
+    async cancelPlan(userId: string, survey: CancelSurvey) {
+        const b = (await this.user(userId)).billing
+        const slots = b?.profiles
+        if (
+            slots?.subscriptionId &&
+            isEntitled(slots.status) &&
+            !slots.cancelAtPeriodEnd
+        ) {
+            throw createHttpError(409, "Cancel your extra profiles first.", {
+                code: "profiles_active",
+            })
         }
-        const ids = [b.plan.subscriptionId]
-        if (b.profiles?.subscriptionId && isEntitled(b.profiles.status)) {
-            ids.push(b.profiles.subscriptionId)
-        }
-        for (const id of ids) {
-            await this.applySubscription(
-                await stripe.subscriptions.update(id, {
-                    cancel_at_period_end: cancel,
-                }),
+        await this.stopAtPeriodEnd(b?.plan, true, {
+            cancel_reason: survey.reason,
+            stay_if_offered: survey.stayIfOffered.join(", "),
+        })
+        return this.status(userId)
+    }
+
+    async resumePlan(userId: string) {
+        const b = (await this.user(userId)).billing
+        await this.stopAtPeriodEnd(b?.plan, false, NO_SURVEY)
+        return this.status(userId)
+    }
+
+    /** Extra profiles stop (or carry on) at the end of their paid month; the plan is untouched. */
+    async setProfilesCancelAtPeriodEnd(userId: string, cancel: boolean) {
+        const b = (await this.user(userId)).billing
+        if (!cancel && b?.plan?.cancelAtPeriodEnd) {
+            throw createHttpError(
+                409,
+                "Your plan is ending. Keep your plan first.",
+                {
+                    code: "plan_ending",
+                },
             )
         }
+        await this.stopAtPeriodEnd(b?.profiles, cancel)
         return this.status(userId)
+    }
+
+    private async stopAtPeriodEnd(
+        mirror:
+            | { subscriptionId?: string | null; status?: string | null }
+            | null
+            | undefined,
+        cancel: boolean,
+        metadata?: Record<string, string>,
+    ) {
+        if (!mirror?.subscriptionId || !isEntitled(mirror.status)) {
+            throw createHttpError(400, "There is no active subscription.")
+        }
+        await this.applySubscription(
+            await stripe.subscriptions.update(mirror.subscriptionId, {
+                cancel_at_period_end: cancel,
+                ...(metadata && { metadata }),
+            }),
+        )
     }
 
     /**
@@ -409,6 +465,15 @@ export class BillingService {
             throw createHttpError(402, "An active plan is required.", {
                 code: "plan_required",
             })
+        }
+        if (user.billing?.plan?.cancelAtPeriodEnd) {
+            throw createHttpError(
+                409,
+                "Your plan is ending. Keep your plan first.",
+                {
+                    code: "plan_ending",
+                },
+            )
         }
         const used = await this.profileModel.countDocuments({ user: userId })
         const allowed =
@@ -430,12 +495,16 @@ export class BillingService {
             if (slots.quantity === pack.extra) {
                 throw createHttpError(409, "You already have this pack.")
             }
-            const sub = await stripe.subscriptions.retrieve(
-                slots.subscriptionId,
-            )
+            let sub = await stripe.subscriptions.retrieve(slots.subscriptionId)
             const item = sub.items.data[0]
             if (!item) {
                 throw createHttpError(500, "The subscription has no item")
+            }
+            if (sub.cancel_at_period_end) {
+                // a pack switch is a decision to keep one
+                sub = await stripe.subscriptions.update(sub.id, {
+                    cancel_at_period_end: false,
+                })
             }
             const updated = await stripe.subscriptions.update(sub.id, {
                 items: [
@@ -599,23 +668,6 @@ export class BillingService {
             }
         }
         return this.card(userId)
-    }
-
-    /** Account deletion: deleting the customer cancels every subscription. */
-    async closeCustomer(userId: string) {
-        const customerId = (await this.userModel.findById(userId))?.billing
-            ?.customerId
-        if (!customerId) {
-            return
-        }
-        try {
-            await stripe.customers.del(customerId)
-        } catch (e) {
-            // already deleted in the dashboard: nothing left to cancel
-            if ((e as { code?: string }).code !== "resource_missing") {
-                throw e
-            }
-        }
     }
 
     // ------------------------------------------------------------- sync
@@ -990,11 +1042,11 @@ export class BillingService {
             [`billing.${path}.subscriptionId`]: sub.id,
             [`billing.${path}.status`]: sub.status,
             [`billing.${path}.currentPeriodEnd`]: periodEnd,
+            [`billing.${path}.cancelAtPeriodEnd`]:
+                sub.cancel_at_period_end || sub.cancel_at !== null,
         }
         if (kind === BillingKinds.PLAN) {
             set["billing.plan.tier"] = (await planOf(item?.price))?.tier
-            set["billing.plan.cancelAtPeriodEnd"] =
-                sub.cancel_at_period_end || sub.cancel_at !== null
             if (sub.status === "trialing") {
                 set["billing.trialUsed"] = true
             }
@@ -1043,22 +1095,65 @@ export class BillingService {
             was?.subscriptionId !== sub.id ||
             was.status !== sub.status ||
             was.currentPeriodEnd?.getTime() !== end ||
-            (plan
-                ? user.billing?.plan?.cancelAtPeriodEnd !==
-                  set["billing.plan.cancelAtPeriodEnd"]
-                : user.billing?.profiles?.quantity !==
-                  set["billing.profiles.quantity"])
+            was.cancelAtPeriodEnd !==
+                set[`billing.${path}.cancelAtPeriodEnd`] ||
+            (!plan &&
+                user.billing?.profiles?.quantity !==
+                    set["billing.profiles.quantity"])
         if (!changed || neverPaid.includes(sub.status)) {
             return
+        }
+
+        const wasLive = isEntitled(was?.status)
+        const live = isEntitled(sub.status)
+        const ending = set[`billing.${path}.cancelAtPeriodEnd`] as boolean
+        // same live subscription, and only its cancel-at-period-end flipped
+        const flipped =
+            wasLive &&
+            live &&
+            was?.subscriptionId === sub.id &&
+            was.cancelAtPeriodEnd !== ending
+        const winding = {
+            "astromeridian:access_ends_at": ending
+                ? new Date(end ?? Date.now()).toISOString()
+                : null,
+            "astromeridian:was_trial": sub.status === "trialing",
         }
 
         if (plan) {
             const current = await catalog.plan(
                 set["billing.plan.tier"] as string | undefined,
             )
-            if (current && !neverPaid.includes(was?.status)) {
-                await klaviyo.account(user._id, planProfile(sub, current))
+            if (!current || neverPaid.includes(was?.status)) {
+                return
             }
+            const fields = planProfile(sub, current)
+            const properties = {
+                "astromeridian:plan": current.name,
+                "astromeridian:plan_tier": current.tier,
+                ...winding,
+                "astromeridian:cancel_reason":
+                    fields["astromeridian:general_plan_cancel_reason"] ?? null,
+                "astromeridian:would_have_stayed_if_offered":
+                    fields[
+                        "astromeridian:general_plan_would_have_stayed_if_offered"
+                    ] ?? null,
+            }
+            const event = flipped
+                ? {
+                      metric: ending
+                          ? KlaviyoEvents.GENERAL_PLAN_CANCEL_REQUESTED
+                          : KlaviyoEvents.GENERAL_PLAN_RESUMED,
+                      properties,
+                  }
+                : wasLive && !live && sub.status !== "past_due"
+                  ? {
+                        metric: KlaviyoEvents.GENERAL_PLAN_CANCELLED,
+                        properties,
+                        uniqueId: `general_plan_cancelled:${sub.id}`,
+                    }
+                  : undefined
+            await klaviyo.account(user._id, fields, event)
             return
         }
 
@@ -1071,35 +1166,39 @@ export class BillingService {
             "astromeridian:amount": (pack?.amount ?? 0) / 100,
             "astromeridian:currency": currency.toUpperCase(),
         }
-        const wasLive = isEntitled(was?.status)
-        const live = isEntitled(sub.status)
-        const event =
-            !wasLive && live && neverPaid.includes(was?.status)
+        const event = flipped
+            ? {
+                  metric: ending
+                      ? KlaviyoEvents.PROFILE_PLAN_CANCEL_REQUESTED
+                      : KlaviyoEvents.PROFILE_PLAN_RESUMED,
+                  properties: { ...bought, ...winding },
+              }
+            : !wasLive && live && neverPaid.includes(was?.status)
+              ? {
+                    metric: KlaviyoEvents.PROFILE_PLAN_PURCHASED,
+                    properties: bought,
+                    uniqueId: `profile_plan_purchased:${sub.id}`,
+                }
+              : wasLive && !live && sub.status !== "past_due"
                 ? {
-                      metric: KlaviyoEvents.PROFILE_PLAN_PURCHASED,
+                      metric: KlaviyoEvents.PROFILE_PLAN_CANCELLED,
                       properties: bought,
-                      uniqueId: `profile_plan_purchased:${sub.id}`,
+                      uniqueId: `profile_plan_cancelled:${sub.id}`,
                   }
-                : wasLive && !live && sub.status !== "past_due"
+                : wasLive &&
+                    live &&
+                    was?.subscriptionId === sub.id &&
+                    user.billing?.profiles?.quantity !==
+                        set["billing.profiles.quantity"]
                   ? {
-                        metric: KlaviyoEvents.PROFILE_PLAN_CANCELLED,
-                        properties: bought,
-                        uniqueId: `profile_plan_cancelled:${sub.id}`,
+                        metric: KlaviyoEvents.PROFILE_PLAN_CHANGED,
+                        properties: {
+                            ...bought,
+                            "astromeridian:previous_extra_profiles":
+                                user.billing?.profiles?.quantity ?? 0,
+                        },
                     }
-                  : wasLive &&
-                      live &&
-                      was?.subscriptionId === sub.id &&
-                      user.billing?.profiles?.quantity !==
-                          set["billing.profiles.quantity"]
-                    ? {
-                          metric: KlaviyoEvents.PROFILE_PLAN_CHANGED,
-                          properties: {
-                              ...bought,
-                              "astromeridian:previous_extra_profiles":
-                                  user.billing?.profiles?.quantity ?? 0,
-                          },
-                      }
-                    : undefined
+                  : undefined
         await klaviyo.account(user._id, fields, event)
     }
 

@@ -76,7 +76,29 @@ export class UserService {
         return user
     }
 
-    /** The account and everything that hangs off it. */
+    /** The owner's deletion: everything is kept, only the sessions end. Null if already deleted. */
+    async softDelete(id: string) {
+        const user = await this.userModel.findOneAndUpdate(
+            { _id: id, deletedAt: null },
+            { $set: { deletedAt: new Date() } },
+            { new: true },
+        )
+        if (user) {
+            // refresh and funnel sign-in tokens alike
+            await this.refreshTokenModel?.deleteMany({ user: id })
+        }
+        return user
+    }
+
+    /** Logging in to a deleted account opens it again. */
+    async restore(id: string) {
+        await this.userModel.updateOne(
+            { _id: id },
+            { $set: { deletedAt: null } },
+        )
+    }
+
+    /** The account and everything that hangs off it (an abandoned funnel sign-up). */
     async remove(id: string) {
         await this.profileModel?.deleteMany({ user: id })
         await this.refreshTokenModel?.deleteMany({ user: id })
