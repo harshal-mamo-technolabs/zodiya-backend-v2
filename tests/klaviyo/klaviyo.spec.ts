@@ -6,6 +6,7 @@ import app from "../../src/app.ts"
 import { config } from "../../src/config/index.ts"
 import { connectDB, disconnectDB } from "../../src/config/db.ts"
 import { UserModel } from "../../src/models/User.ts"
+import { RefreshTokenModel } from "../../src/models/RefreshToken.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
 import { stripe } from "../../src/services/BillingService.ts"
 import { KlaviyoEvents, klaviyo } from "../../src/services/KlaviyoService.ts"
@@ -80,6 +81,26 @@ describe("klaviyo sync", () => {
         await mongod.stop()
     })
 
+    it("gives the profile a link back that resumes as that user", async () => {
+        const url = config.FUNNEL_URL
+        config.FUNNEL_URL = "https://funnel.test/"
+        try {
+            await request(app)
+                .post("/funnel/signup")
+                .send({ ...signupBody, hookId: await visit() })
+        } finally {
+            config.FUNNEL_URL = url
+        }
+        const link = String(
+            track.mock.calls[0]?.[2]?.["astromeridian:resume_url"],
+        )
+        expect(link).toMatch(/^https:\/\/funnel\.test\/\?resume=/)
+        const token = new URL(link).searchParams.get("resume")
+        const res = await request(app).post("/funnel/resume").send({ token })
+        expect(res.statusCode).toBe(200)
+        expect((res.body as { stage: string }).stage).toBe("plans")
+    })
+
     it("sends the landing page answers once the email is known", async () => {
         const uuid = await visit()
         await patch(uuid, { lat: 23.02, lon: 72.57 })
@@ -103,7 +124,7 @@ describe("klaviyo sync", () => {
             "astromeridian:lon": 72.57,
             "astromeridian:utm_source": "fb",
             "astromeridian:utm_campaign": "launch",
-            "astromeridian:utm_medium": "default",
+            "astromeridian:utm_medium": "organic",
             "astromeridian:email": userData.email,
         })
         expect(props?.["astromeridian:created_at"]).toEqual(expect.any(String))
@@ -128,6 +149,207 @@ describe("klaviyo sync", () => {
             "astromeridian:landing_page_is_trial_plan": false,
             "astromeridian:landing_page_payment_initiated": true,
             "astromeridian:landing_page_payment_completed": false,
+        })
+    })
+
+    const firstPayment = async (status: string, metadata: object = {}) => {
+        const starter = await planOf("starter")
+        await UserModel.updateOne(
+            { email: userData.email },
+            { $set: { "billing.customerId": "cus_k" } },
+        )
+        jest.spyOn(stripe.subscriptions, "retrieve").mockResolvedValue({
+            id: "sub_k",
+            customer: "cus_k",
+            status,
+            metadata: { kind: "plan", ...metadata },
+            cancel_at_period_end: false,
+            cancel_at: null,
+            default_payment_method: null,
+            items: {
+                data: [
+                    {
+                        current_period_start: 1_800_000_000,
+                        current_period_end: 1_800_259_200,
+                        price: { lookup_key: starter.lookupKey },
+                    },
+                ],
+            },
+        } as unknown as Stripe.Response<Stripe.Subscription>)
+        await deliver({
+            id: "evt_k",
+            type: "invoice.paid",
+            data: {
+                object: {
+                    id: "in_k",
+                    object: "invoice",
+                    status: "paid",
+                    billing_reason: "subscription_create",
+                    parent: { subscription_details: { subscription: "sub_k" } },
+                },
+            },
+        })
+    }
+
+    it("puts what made a plan purchase happen on its event, not the profile", async () => {
+        await request(app).post("/auth/register").send(userData)
+        await firstPayment("active", {
+            utm_source: "organic",
+            utm_campaign: "winback",
+            utm_medium: "email",
+            flow_id: "FLOW1",
+            utm_email: "Klaviyo",
+        })
+
+        const [, , profile, uniqueId, event] =
+            track.mock.calls.find(
+                ([e]) => e === KlaviyoEvents.GENERAL_PLAN_PURCHASED,
+            ) ?? []
+        expect(uniqueId).toBe("general_plan_purchased:in_k")
+        expect(event).toEqual({
+            "astromeridian:utm_source": "organic",
+            "astromeridian:utm_campaign": "winback",
+            "astromeridian:utm_medium": "email",
+            "astromeridian:flow_id": "FLOW1",
+            "astromeridian:utm_email": "Klaviyo",
+        })
+        expect(profile).toMatchObject({
+            "astromeridian:utm_campaign": "organic",
+            "astromeridian:utm_medium": "organic",
+        })
+        expect(profile).not.toHaveProperty("astromeridian:flow_id")
+    })
+
+    it("sends the landing page name at each step of the funnel", async () => {
+        const { uuid } = (
+            await request(app)
+                .post("/funnel/hook")
+                .send({ landingPageName: "landing-page-1" })
+        ).body as { uuid: string }
+        await request(app)
+            .post("/funnel/signup")
+            .send({ ...signupBody, hookId: uuid })
+        await patch(uuid, { plan: "premium", trial: false })
+        await firstPayment("active")
+
+        const nameOn = (metric: string) =>
+            track.mock.calls.find(([e]) => e === metric)?.[2]?.[
+                "astromeridian:landing_page_name"
+            ]
+        expect(nameOn(KlaviyoEvents.EMAIL_CAPTURED)).toBe("landing-page-1")
+        expect(nameOn(KlaviyoEvents.PAYMENT_INITIATED)).toBe("landing-page-1")
+        expect(nameOn(KlaviyoEvents.PAYMENT_COMPLETED)).toBe("landing-page-1")
+    })
+
+    describe("the link to choose a password", () => {
+        const url = config.APP_URL
+        const password = "a-new-password"
+        const reset = (token: string | null) =>
+            request(app).post("/auth/reset-password").send({ token, password })
+
+        beforeEach(() => {
+            config.APP_URL = "https://app.test/"
+        })
+        afterEach(() => {
+            config.APP_URL = url
+        })
+
+        const buyerLink = async (status = "active") => {
+            await request(app)
+                .post("/funnel/signup")
+                .send({ ...signupBody, hookId: await visit() })
+            await firstPayment(status)
+            const [, , props] =
+                track.mock.calls.find(
+                    ([e]) => e === KlaviyoEvents.PAYMENT_COMPLETED,
+                ) ?? []
+            return String(props?.["astromeridian:reset_password"])
+        }
+
+        it.each(["active", "trialing"])(
+            "goes out on a funnel purchase (%s), signs in, and works once",
+            async (status) => {
+                const link = await buyerLink(status)
+                expect(link).toMatch(
+                    /^https:\/\/app\.test\/reset-password\?token=[0-9a-f]{64}$/,
+                )
+                const token = new URL(link).searchParams.get("token")
+
+                const res = await reset(token)
+                expect(res.statusCode).toBe(200)
+                const cookies = (
+                    res.headers as unknown as { "set-cookie": string[] }
+                )["set-cookie"].join(" ")
+                expect(cookies).toMatch(/accessToken=/)
+
+                const login = await request(app)
+                    .post("/auth/login")
+                    .send({ email: userData.email, password })
+                expect(login.statusCode).toBe(200)
+                expect((await reset(token)).statusCode).toBe(400)
+            },
+        )
+
+        it("keeps only a hash of the token", async () => {
+            const token = new URL(await buyerLink()).searchParams.get("token")
+            const user = await UserModel.findOne({
+                email: userData.email,
+            }).select("+passwordResetToken")
+            expect(user?.passwordResetToken).toEqual(expect.any(String))
+            expect(user?.passwordResetToken).not.toBe(token)
+        })
+
+        it("is not for someone who chose a password at sign-up", async () => {
+            await request(app).post("/auth/register").send({
+                firstName: userData.firstName,
+                lastName: userData.lastName,
+                email: userData.email,
+                password: userData.password,
+            })
+            await firstPayment("active")
+
+            // the payment was processed, and still no link was made
+            const synced = track.mock.calls.find(
+                ([e]) => e === KlaviyoEvents.GENERAL_PLAN_PURCHASED,
+            )?.[2]
+            expect(synced?.["astromeridian:general_plan_status"]).toBe("active")
+            expect(synced).not.toHaveProperty("astromeridian:reset_password")
+            const user = await UserModel.findOne({
+                email: userData.email,
+            }).select("+passwordResetToken")
+            expect(user?.passwordResetToken).toBeUndefined()
+        })
+
+        it("ends every other session", async () => {
+            const token = new URL(await buyerLink()).searchParams.get("token")
+            const user = await UserModel.findOne({ email: userData.email })
+            if (!user) throw new Error("no account was created")
+            const old = await RefreshTokenModel.create({
+                user: user._id,
+                expiresAt: new Date(Date.now() + 60_000),
+            })
+
+            expect((await reset(token)).statusCode).toBe(200)
+
+            expect(await RefreshTokenModel.exists({ _id: old._id })).toBeNull()
+        })
+
+        it("refuses a deleted account, a made-up token or a short password", async () => {
+            const token = new URL(await buyerLink()).searchParams.get("token")
+            const short = await request(app)
+                .post("/auth/reset-password")
+                .send({ token, password: "short" })
+            expect(short.statusCode).toBe(400)
+            expect((await reset("ab".repeat(32))).statusCode).toBe(400)
+            const injected = await request(app)
+                .post("/auth/reset-password")
+                .send({ token: { $ne: null }, password })
+            expect(injected.statusCode).toBe(400)
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { deletedAt: new Date() } },
+            )
+            expect((await reset(token)).statusCode).toBe(400)
         })
     })
 
@@ -318,7 +540,7 @@ describe("klaviyo sync", () => {
         expect(track.mock.calls[2]?.[3]).toBe("general_plan_cancelled:sub_k")
     })
 
-    it("syncs a direct sign-up with the 'default' campaign", async () => {
+    it("syncs a direct sign-up with the 'organic' campaign", async () => {
         const identify = jest.spyOn(klaviyo, "identify")
         await request(app).post("/auth/register").send(userData)
         for (let i = 0; i < 20 && !identify.mock.calls.length; i++) {
@@ -329,9 +551,9 @@ describe("klaviyo sync", () => {
         expect(email).toBe(userData.email)
         expect(props).toMatchObject({
             "astromeridian:full_name": "harshal chauhan",
-            "astromeridian:utm_source": "default",
-            "astromeridian:utm_campaign": "default",
-            "astromeridian:utm_medium": "default",
+            "astromeridian:utm_source": "organic",
+            "astromeridian:utm_campaign": "organic",
+            "astromeridian:utm_medium": "organic",
             "astromeridian:astrologer_minutes_total_left": 0,
             "astromeridian:palm_readings_total_left": 0,
             "astromeridian:profiles_allowed": 1,
@@ -397,6 +619,9 @@ describe("klaviyo sync", () => {
             "astromeridian:amount": 7.5,
             "astromeridian:currency": "EUR",
             "astromeridian:stripe_payment_intent_id": "pi_m",
+            "astromeridian:utm_source": "organic",
+            "astromeridian:utm_campaign": "organic",
+            "astromeridian:utm_medium": "organic",
         })
         const palm = track.mock.calls.find(
             ([e]) => e === KlaviyoEvents.PALM_READINGS_PURCHASED,

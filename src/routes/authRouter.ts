@@ -15,6 +15,7 @@ import { config } from "../config/index.ts"
 import logger from "../config/logger.ts"
 import registerValidator from "../validators/registerValidator.ts"
 import loginValidator from "../validators/loginValidator.ts"
+import resetPasswordValidator from "../validators/resetPasswordValidator.ts"
 
 const router = express.Router()
 
@@ -68,6 +69,14 @@ router.post(
     "/handoff",
     credentials,
     authController.handoff.bind(authController),
+)
+
+// the link sent after a funnel purchase
+router.post(
+    "/reset-password",
+    credentials,
+    resetPasswordValidator,
+    authController.resetPassword.bind(authController),
 )
 
 router.post("/logout", authController.logout.bind(authController))

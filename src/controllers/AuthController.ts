@@ -13,7 +13,11 @@ import type {
 } from "../types/index.ts"
 import type { UserDocument } from "../models/User.ts"
 import type { UserService } from "../services/UserService.ts"
-import { tokenPayload, type TokenService } from "../services/TokenService.ts"
+import {
+    hashResetToken,
+    tokenPayload,
+    type TokenService,
+} from "../services/TokenService.ts"
 import type { CredentialService } from "../services/CredentialService.ts"
 import { isEntitled } from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
@@ -64,7 +68,7 @@ export default class AuthController {
                 password,
             )
 
-            // a direct sign-up: no campaign, so its utm fields read "default"
+            // a direct sign-up: no campaign, so its utm fields read "organic"
             void klaviyo.account(user._id)
             this.logger.info("User has been registered", { id: user._id })
 
@@ -337,6 +341,39 @@ export default class AuthController {
             res.clearCookie("accessToken", COOKIE_OPTIONS)
             res.clearCookie("refreshToken", COOKIE_OPTIONS)
             res.status(204).end()
+        } catch (e) {
+            next(e)
+        }
+    }
+
+    /** A reset link's token and a new password in, a normal session out. */
+    async resetPassword(req: Request, res: Response, next: NextFunction) {
+        const result = validationResult(req)
+        if (!result.isEmpty()) {
+            res.status(400).json({ errors: result.array() })
+            return
+        }
+        const { token, password } = req.body as {
+            token: string
+            password: string
+        }
+        try {
+            const user = await this.userService.resetPassword(
+                hashResetToken(token),
+                password,
+            )
+            if (!user) {
+                next(
+                    createHttpError(
+                        400,
+                        "This link has already been used or is no longer valid.",
+                    ),
+                )
+                return
+            }
+            await this.setAuthCookies(res, user)
+            this.logger.info("Password set from a reset link", { id: user._id })
+            res.status(200).json({ id: user._id })
         } catch (e) {
             next(e)
         }

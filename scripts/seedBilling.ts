@@ -7,7 +7,10 @@
  *
  * Only inserts what is missing, keyed by tier / packId: a row someone has
  * edited in the database is never overwritten. The app reads the catalog
- * from the database only; these values are just the starting point. After
+ * from the database only; these values are just the starting point.
+ * To apply the repository prices and allowances to existing rows, run
+ * `npm run billing:seed -- --update-pricing`. This preserves billing periods,
+ * regular plan minutes and other catalog customizations. After
  * changing a recurring price run `npm run stripe:setup`. Reads MONGO_URI from
  * .env.<NODE_ENV> (development by default), like the app.
  */
@@ -25,30 +28,30 @@ const PLANS = [
         tier: "starter",
         name: "Starter",
         lookupKey: "zodiya_starter_monthly",
-        amount: 1499,
+        amount: 3499,
         months: 1,
         minutes: 20,
-        palm: 3,
+        palm: 20,
         includedProfiles: 1,
         featured: false,
         order: 1,
         active: true,
         trial: {
             lookupKey: "zodiya_starter_trial_fee",
-            amount: 299,
+            amount: 499,
             days: 7,
-            minutes: 5,
-            palm: 1,
+            minutes: 7,
+            palm: 5,
         },
     },
     {
         tier: "premium",
         name: "Premium",
         lookupKey: "zodiya_premium_quarterly",
-        amount: 3499,
+        amount: 7999,
         months: 3,
         minutes: 60,
-        palm: 10,
+        palm: 60,
         includedProfiles: 1,
         featured: true,
         order: 2,
@@ -58,10 +61,10 @@ const PLANS = [
         tier: "gold",
         name: "Gold",
         lookupKey: "zodiya_gold_semiannual",
-        amount: 5999,
+        amount: 14999,
         months: 6,
         minutes: 120,
-        palm: 25,
+        palm: 120,
         includedProfiles: 1,
         featured: false,
         order: 3,
@@ -91,9 +94,9 @@ const PROFILE_PACKS = [
 ].map((p, i) => ({ ...p, order: i + 1, active: true }))
 
 const MINUTE_PACKS = [
-    { packId: "pack_10", minutes: 10, amount: 499 },
-    { packId: "pack_30", minutes: 30, amount: 1199 },
-    { packId: "pack_60", minutes: 60, amount: 1999 },
+    { packId: "pack_10", minutes: 10, amount: 699 },
+    { packId: "pack_30", minutes: 30, amount: 1499 },
+    { packId: "pack_60", minutes: 60, amount: 2499 },
 ].map((p, i) => ({ ...p, order: i + 1, active: true }))
 
 const PALM_PACKS = [
@@ -134,6 +137,38 @@ export async function seedBilling() {
     )
 }
 
+/** Applies the requested pricing without resetting unrelated catalog fields. */
+export async function updateBillingPricing() {
+    for (const plan of PLANS) {
+        await PlanModel.updateOne(
+            { tier: plan.tier },
+            {
+                $set: {
+                    amount: plan.amount,
+                    palm: plan.palm,
+                    ...(plan.trial && {
+                        "trial.amount": plan.trial.amount,
+                        "trial.minutes": plan.trial.minutes,
+                        "trial.palm": plan.trial.palm,
+                    }),
+                },
+            },
+        )
+    }
+    for (const [model, packs] of [
+        [ProfilePackModel, PROFILE_PACKS],
+        [MinutePackModel, MINUTE_PACKS],
+        [PalmPackModel, PALM_PACKS],
+    ] as const) {
+        for (const pack of packs) {
+            await model.collection.updateOne(
+                { packId: pack.packId },
+                { $set: { amount: pack.amount } },
+            )
+        }
+    }
+}
+
 if (
     process.argv[1] &&
     path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
@@ -146,5 +181,9 @@ if (
             ? `billing catalog: inserted ${String(added)} missing row(s)`
             : "billing catalog: already complete, nothing changed",
     )
+    if (process.argv.includes("--update-pricing")) {
+        await updateBillingPricing()
+        console.log("billing catalog: updated prices and palm/trial allowances")
+    }
     await disconnectDB()
 }

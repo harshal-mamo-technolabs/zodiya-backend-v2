@@ -58,6 +58,7 @@ describe("POST /auth/register", () => {
 
             expect(users).toHaveLength(1)
             expect(users[0]?.firstName).toBe(userData.firstName)
+            expect(users[0]?.signupType).toBe("email")
             expect(users[0]?.lastName).toBe(userData.lastName)
             expect(users[0]?.email).toBe(userData.email)
         })

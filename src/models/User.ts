@@ -20,13 +20,23 @@ const userSchema = new Schema(
             trim: true,
         },
         password: { type: String, required: true, select: false },
+        // a hash: the link itself only ever goes to the owner's inbox
+        passwordResetToken: {
+            type: String,
+            select: false,
+            index: true,
+            sparse: true,
+        },
         // optional; only the onboarding funnel asks for it
         gender: { type: String, enum: GENDERS },
-        // the campaign that brought them, as the funnel's landing URL said;
-        // also sent to Stripe and Help Scout
-        utm_source: { type: String, default: "default" },
-        utm_campaign: { type: String, default: "default" },
-        utm_medium: { type: String, default: "default" },
+        // the campaign that first brought them, as the funnel's landing URL
+        // said; also sent to Stripe and Help Scout. Set when the account is
+        // created and never again: immutable makes mongoose drop any later write.
+        utm_source: { type: String, default: "organic", immutable: true },
+        utm_campaign: { type: String, default: "organic", immutable: true },
+        utm_medium: { type: String, default: "organic", immutable: true },
+        // how the account was created; the analytics dashboard counts signups by it
+        signupType: { type: String, default: "email", immutable: true },
         role: {
             type: String,
             enum: Object.values(Roles),

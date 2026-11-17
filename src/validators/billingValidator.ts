@@ -20,8 +20,25 @@ export const plan = oneOf("Plan", async () =>
     (await catalog.plans()).map((p) => p.tier),
 )
 
+const text = {
+    optional: true,
+    isString: true,
+    trim: true,
+    isLength: { options: { max: 200 } },
+}
+
+/** Where a purchase came from: the link's own values, or the funnel visit it belongs to. */
+const purchaseTouch = {
+    utm_campaign: text,
+    utm_medium: text,
+    flow_id: text,
+    utm_email: text,
+    hookId: { optional: true, isUUID: true },
+}
+
 export const subscribeValidator = checkSchema(
     {
+        ...purchaseTouch,
         plan,
         trial: { optional: true, isBoolean: { options: { strict: true } } },
     },
@@ -33,6 +50,7 @@ export const changePlanValidator = checkSchema({ plan }, ["body"])
 const packValidator = (ids: () => Promise<{ packId: string }[]>) =>
     checkSchema(
         {
+            ...purchaseTouch,
             pack: oneOf("Pack", async () => (await ids()).map((p) => p.packId)),
             quantity: {
                 optional: true,
@@ -63,6 +81,7 @@ export const palmValidator = packValidator(() => catalog.palmPacks())
 
 export const profilePackValidator = checkSchema(
     {
+        ...purchaseTouch,
         pack: oneOf("Pack", async () =>
             (await catalog.profilePacks()).map((p) => p.packId),
         ),

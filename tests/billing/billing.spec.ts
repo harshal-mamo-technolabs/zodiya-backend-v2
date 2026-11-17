@@ -1,3 +1,5 @@
+import { randomUUID } from "crypto"
+import { LandingPageHookModel } from "../../src/models/LandingPageHook.ts"
 import { jest } from "@jest/globals"
 import request from "supertest"
 import { MongoMemoryServer } from "mongodb-memory-server"
@@ -168,8 +170,8 @@ describe("billing", () => {
                 ),
             ).toEqual(["starter", "premium", "gold"])
             expect(catalog.body).toMatchObject({
-                plans: [{ palm: 3 }, { palm: 10 }, { palm: 25 }],
-                trial: { palm: 1 },
+                plans: [{ palm: 20 }, { palm: 60 }, { palm: 120 }],
+                trial: { palm: 5 },
                 palmPacks: [
                     { id: "palm_3", readings: 3, amount: 499 },
                     { id: "palm_7", readings: 7, amount: 999 },
@@ -317,9 +319,9 @@ describe("billing", () => {
                     ],
                     metadata: expect.objectContaining({
                         kind: "profiles",
-                        utm_source: "default",
-                        utm_campaign: "default",
-                        utm_medium: "default",
+                        utm_source: "organic",
+                        utm_campaign: "organic",
+                        utm_medium: "organic",
                     }) as unknown,
                 }),
             )
@@ -555,7 +557,7 @@ describe("billing", () => {
             expect(user?.billing?.minutes?.allowance).toBe(
                 (starter.trial?.minutes ?? 0) * 60,
             )
-            expect(user?.billing?.palm?.allowance).toBe(1)
+            expect(user?.billing?.palm?.allowance).toBe(starter.trial?.palm)
         })
 
         it("refills plan minutes each cycle, once per invoice", async () => {
@@ -573,7 +575,10 @@ describe("billing", () => {
             )
 
             await deliver(paidInvoice("in_cycle", "subscription_cycle"))
-            expect(await palm()).toMatchObject({ allowance: 10, used: 0 })
+            expect(await palm()).toMatchObject({
+                allowance: premium.palm,
+                used: 0,
+            })
             await UserModel.updateOne(
                 { email: userData.email },
                 {
@@ -590,7 +595,10 @@ describe("billing", () => {
                 allowance: premium.minutes * 60,
                 used: 100,
             })
-            expect(await palm()).toMatchObject({ allowance: 10, used: 2 })
+            expect(await palm()).toMatchObject({
+                allowance: premium.palm,
+                used: 2,
+            })
             expect(await BillingGrantModel.countDocuments()).toBe(1)
         })
 
@@ -609,7 +617,10 @@ describe("billing", () => {
             )
 
             await deliver(paidInvoice("in_change", "subscription_update"))
-            expect(await palm()).toMatchObject({ allowance: 10, used: 2 })
+            expect(await palm()).toMatchObject({
+                allowance: premium.palm,
+                used: 2,
+            })
 
             expect(await minutes()).toMatchObject({
                 allowance: premium.minutes * 60,
@@ -735,10 +746,89 @@ describe("billing", () => {
                     metadata: expect.objectContaining({
                         kind: "palm",
                         readings: "14",
-                        utm_source: "default",
+                        utm_source: "organic",
                     }) as unknown,
                 }),
             )
+        })
+
+        describe("what made the purchase happen", () => {
+            const metadataOf = async (body: object) => {
+                const create = jest
+                    .spyOn(stripe.paymentIntents, "create")
+                    .mockResolvedValue({
+                        id: "pi_palm",
+                        client_secret: "pi_palm_secret",
+                    } as never)
+                const response = await buy({ pack: "palm_7", ...body })
+                expect(response.statusCode).toBe(200)
+                const params = create.mock.calls.at(-1)?.[0]
+                return params?.metadata as Record<string, string>
+            }
+
+            beforeEach(async () => {
+                await UserModel.collection.updateOne(
+                    { email: userData.email },
+                    { $set: { utm_source: "facebook" } },
+                )
+            })
+
+            it("is the link's campaign, medium and ids, under the account's own source", async () => {
+                expect(
+                    await metadataOf({
+                        utm_source: "email",
+                        utm_campaign: "winback",
+                        utm_medium: "newsletter",
+                        flow_id: "FLOW1",
+                    }),
+                ).toMatchObject({
+                    utm_source: "facebook",
+                    utm_campaign: "winback",
+                    utm_medium: "newsletter",
+                    flow_id: "FLOW1",
+                    utm_email: "Klaviyo",
+                })
+            })
+
+            it("is organic with no link, whatever the account first came from", async () => {
+                await UserModel.collection.updateOne(
+                    { email: userData.email },
+                    { $set: { utm_campaign: "spring", utm_medium: "cpc" } },
+                )
+                const metadata = await metadataOf({})
+                expect(metadata).toMatchObject({
+                    utm_source: "facebook",
+                    utm_campaign: "organic",
+                    utm_medium: "organic",
+                })
+                expect(metadata).not.toHaveProperty("flow_id")
+                expect(metadata).not.toHaveProperty("utm_email")
+            })
+
+            it("is their latest funnel visit when the funnel is buying", async () => {
+                await LandingPageHookModel.create([
+                    {
+                        uuid: randomUUID(),
+                        email: userData.email,
+                        utm_campaign: "old",
+                        flow_id: "OLD",
+                    },
+                    {
+                        uuid: randomUUID(),
+                        email: userData.email,
+                        utm_campaign: "new",
+                        utm_medium: "email",
+                        flow_id: "NEW",
+                    },
+                ])
+                expect(
+                    await metadataOf({ hookId: randomUUID() }),
+                ).toMatchObject({
+                    utm_campaign: "new",
+                    utm_medium: "email",
+                    flow_id: "NEW",
+                })
+            })
         })
 
         it("refuses an unknown pack and too many packs", async () => {
@@ -793,7 +883,9 @@ describe("billing", () => {
             const again = await request(app)
                 .get("/billing/status")
                 .set("Cookie", [cookie])
-            expect(again.body).toMatchObject({ palm: { total: 0 } })
+            expect(again.body).toMatchObject({
+                palm: { total: (starter.trial?.palm ?? 0) - 1 },
+            })
         })
     })
 

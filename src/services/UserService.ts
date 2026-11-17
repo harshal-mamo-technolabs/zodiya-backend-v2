@@ -24,6 +24,8 @@ export class UserService {
         email: string,
         password: string,
         role: Role = Roles.CUSTOMER,
+        // the only chance to set them: the fields are immutable afterwards
+        utm: Record<string, string> = {},
     ) {
         const user = await this.userModel.findOne({ email })
         if (user) {
@@ -41,6 +43,7 @@ export class UserService {
                 email,
                 password: hashedPassword,
                 role,
+                ...utm,
             })
         } catch {
             const error = createHttpError(
@@ -73,6 +76,25 @@ export class UserService {
             })
         }
         await user.save()
+        return user
+    }
+
+    /**
+     * The password a reset link chose; the link is used up in the same write, and
+     * every session and funnel sign-in token ends. Null if the link is no good.
+     */
+    async resetPassword(tokenHash: string, password: string) {
+        const user = await this.userModel.findOneAndUpdate(
+            { passwordResetToken: tokenHash, deletedAt: null },
+            {
+                $set: { password: await bcrypt.hash(password, 10) },
+                $unset: { passwordResetToken: 1 },
+            },
+            { returnDocument: "after" },
+        )
+        if (user) {
+            await this.refreshTokenModel?.deleteMany({ user: user._id })
+        }
         return user
     }
 

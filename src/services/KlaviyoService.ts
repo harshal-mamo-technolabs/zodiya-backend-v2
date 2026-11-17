@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto"
 import type Stripe from "stripe"
 import { config } from "../config/index.ts"
 import logger from "../config/logger.ts"
@@ -5,6 +6,7 @@ import { ENTITLED_STATUSES } from "../constants/index.ts"
 import { catalog, type Plan, type ProfilePack } from "./CatalogService.ts"
 import { UserModel, type UserDocument } from "../models/User.ts"
 import { ProfileModel } from "../models/Profile.ts"
+import { hashResetToken, resumeToken } from "./TokenService.ts"
 
 /**
  * Mirrors every account into Klaviyo: profile fields prefixed
@@ -22,6 +24,7 @@ export const KlaviyoEvents = {
     EMAIL_CAPTURED: "ASTROMERIDIAN:LANDING_PAGE_EMAIL_CAPTURED",
     PAYMENT_INITIATED: "ASTROMERIDIAN:LANDING_PAGE_PAYMENT_INITIATED",
     PAYMENT_COMPLETED: "ASTROMERIDIAN:LANDING_PAGE_PAYMENT_COMPLETED",
+    GENERAL_PLAN_PURCHASED: "ASTROMERIDIAN:GENERAL_PLAN_PURCHASED",
     PROFILE_PLAN_PURCHASED: "ASTROMERIDIAN:PROFILE_PLAN_PURCHASED",
     PROFILE_PLAN_CHANGED: "ASTROMERIDIAN:PROFILE_PLAN_CHANGED",
     // *_CANCEL_REQUESTED: stops renewing, still live; *_CANCELLED: ended
@@ -73,6 +76,7 @@ export function landingProfile(v: {
     utm_source?: string | null
     utm_campaign?: string | null
     utm_medium?: string | null
+    landingPageName?: string | null
     createdAt?: Date | null
 }): Props {
     return {
@@ -89,9 +93,10 @@ export function landingProfile(v: {
         "astromeridian:country": v.country ?? null,
         "astromeridian:lat": v.lat ?? null,
         "astromeridian:lon": v.lon ?? null,
-        "astromeridian:utm_source": v.utm_source ?? "default",
-        "astromeridian:utm_campaign": v.utm_campaign ?? "default",
-        "astromeridian:utm_medium": v.utm_medium ?? "default",
+        "astromeridian:utm_source": v.utm_source ?? "organic",
+        "astromeridian:utm_campaign": v.utm_campaign ?? "organic",
+        "astromeridian:utm_medium": v.utm_medium ?? "organic",
+        "astromeridian:landing_page_name": v.landingPageName ?? null,
         "astromeridian:email": v.email,
         "astromeridian:created_at": (v.createdAt ?? new Date()).toISOString(),
     }
@@ -162,17 +167,47 @@ export function profilePlanProfile(
     }
 }
 
-/** Who the account is, as the portal knows it ("default" campaign for a direct sign-up). */
+/**
+ * The link for emails to use. Every sync brings a fresh one, so a profile that
+ * keeps changing never holds an expired one.
+ */
+export const resumeLink = (userId: string): Props =>
+    config.FUNNEL_URL
+        ? {
+              "astromeridian:resume_url": `${config.FUNNEL_URL.replace(/\/+$/, "")}/?resume=${resumeToken(userId)}`,
+          }
+        : {}
+
+/**
+ * A new link for choosing a password, replacing any earlier one. It works once
+ * and does not expire: a funnel account has no other way to get a password.
+ */
+export async function passwordResetLink(userId: unknown): Promise<Props> {
+    if (!config.APP_URL) {
+        return {}
+    }
+    const token = randomBytes(32).toString("hex")
+    await UserModel.updateOne(
+        { _id: userId },
+        { $set: { passwordResetToken: hashResetToken(token) } },
+    )
+    return {
+        "astromeridian:reset_password": `${config.APP_URL.replace(/\/+$/, "")}/reset-password?token=${token}`,
+    }
+}
+
+/** Who the account is, as the portal knows it ("organic" campaign for a direct sign-up). */
 function accountProfile(user: UserDocument): Props {
     return {
         "astromeridian:full_name": `${user.firstName} ${user.lastName}`,
         "astromeridian:first_name": user.firstName,
         "astromeridian:last_name": user.lastName,
         "astromeridian:email": user.email,
+        ...resumeLink(user._id.toString()),
         ...(user.gender && { "astromeridian:gender": user.gender }),
-        "astromeridian:utm_source": user.utm_source || "default",
-        "astromeridian:utm_campaign": user.utm_campaign || "default",
-        "astromeridian:utm_medium": user.utm_medium || "default",
+        "astromeridian:utm_source": user.utm_source || "organic",
+        "astromeridian:utm_campaign": user.utm_campaign || "organic",
+        "astromeridian:utm_medium": user.utm_medium || "organic",
         // a soft delete, so every later sync still says so; cleared on restore
         "astromeridian:is_user_deleted": !!user.deletedAt,
         "astromeridian:account_deleted_at":

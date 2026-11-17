@@ -19,6 +19,7 @@ import { ReadingService } from "../services/ReadingService.ts"
 import {
     hookCreateValidator,
     hookUpdateValidator,
+    resumeValidator,
 } from "../validators/funnelHookValidator.ts"
 import funnelSignupValidator from "../validators/funnelSignupValidator.ts"
 import {
@@ -94,6 +95,14 @@ router.post(
     limited(60 * 60 * 1000, 10),
     funnelSignupValidator,
     funnelController.signup.bind(funnelController),
+)
+
+// an email link back into the funnel, signed in
+router.post(
+    "/resume",
+    limited(15 * 60 * 1000, 30),
+    resumeValidator,
+    funnelController.resume.bind(funnelController),
 )
 
 router.post(

@@ -12,7 +12,7 @@ import { PlanModel } from "../../src/models/Plan.ts"
 import { PalmPackModel } from "../../src/models/PalmPack.ts"
 import { BillingService, stripe } from "../../src/services/BillingService.ts"
 import { catalog } from "../../src/services/CatalogService.ts"
-import { seedBilling } from "../../scripts/seedBilling.ts"
+import { seedBilling, updateBillingPricing } from "../../scripts/seedBilling.ts"
 import {
     planOf,
     registerAndGetCookie,
@@ -139,7 +139,7 @@ describe("billing catalog from the database", () => {
 
         expect(response.statusCode).toBe(200)
         expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({ amount: 2398, currency: "eur" }),
+            expect.objectContaining({ amount: 2998, currency: "eur" }),
         )
     })
 
@@ -147,6 +147,46 @@ describe("billing catalog from the database", () => {
         await PlanModel.updateOne({ tier: "gold" }, { $set: { amount: 4500 } })
         expect(await seedBilling()).toBe(0)
         expect((await PlanModel.findOne({ tier: "gold" }))?.amount).toBe(4500)
+    })
+
+    it("updates pricing while preserving plan minutes, periods and trial duration", async () => {
+        await PlanModel.updateOne(
+            { tier: "starter" },
+            {
+                $set: {
+                    amount: 1,
+                    palm: 1,
+                    minutes: 42,
+                    months: 2,
+                    "trial.amount": 1,
+                    "trial.minutes": 1,
+                    "trial.palm": 1,
+                    "trial.days": 14,
+                },
+            },
+        )
+        await updateBillingPricing()
+        await updateBillingPricing()
+        catalog.clearCache()
+        const current = await catalog.catalog()
+        expect(current.plans).toMatchObject([
+            { amount: 3499, palm: 20, minutes: 42, months: 2 },
+            { amount: 7999, palm: 60, minutes: 60, months: 3 },
+            { amount: 14999, palm: 120, minutes: 120, months: 6 },
+        ])
+        expect(current.trial).toMatchObject({
+            amount: 499,
+            minutes: 7,
+            palm: 5,
+            days: 14,
+        })
+        expect(current.profilePacks.map((p) => p.amount)).toEqual([
+            299, 699, 1199,
+        ])
+        expect(current.minutePacks.map((p) => p.amount)).toEqual([
+            699, 1499, 2499,
+        ])
+        expect(current.palmPacks.map((p) => p.amount)).toEqual([499, 999, 1299])
     })
 
     it("answers 503 when the catalog was never seeded", async () => {

@@ -52,6 +52,12 @@ export const config = {
     PAYMENTS_ENABLED: process.env.PAYMENTS_ENABLED !== "false",
     // signs the Help Scout Beacon identity; support chat stays anonymous without it
     HELPSCOUT_SECURE_MODE_KEY: process.env.HELPSCOUT_SECURE_MODE_KEY ?? "",
+    // Agent sidebar authentication is separate from customer Beacon secure mode.
+    HELPSCOUT_SIDEBAR_SECRET: process.env.HELPSCOUT_SIDEBAR_SECRET ?? "",
+    HELPSCOUT_INBOX_ID: process.env.HELPSCOUT_INBOX_ID ?? "",
+    HELPSCOUT_MAILBOX_APP_ID: process.env.HELPSCOUT_MAILBOX_APP_ID ?? "",
+    HELPSCOUT_MAILBOX_APP_SECRET:
+        process.env.HELPSCOUT_MAILBOX_APP_SECRET ?? "",
     // palm reading only; the app boots without it and /palm/read answers 503
     OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
     OPENAI_VISION_MODEL: process.env.OPENAI_VISION_MODEL ?? "gpt-6-luna",
@@ -66,4 +72,8 @@ export const config = {
     AWS_BUCKET_NAME: process.env.AWS_BUCKET_NAME ?? "",
     AWS_REGION: process.env.AWS_REGION ?? "eu-north-1",
     KLAVIYO_PRIVATE_API_KEY: process.env.KLAVIYO_PRIVATE_API_KEY ?? "",
+    // where email links land; without it no profile gets a resume link
+    FUNNEL_URL: process.env.FUNNEL_URL ?? "",
+    // the app, for the same reason: no set-a-password link without it
+    APP_URL: process.env.APP_URL ?? "",
 }

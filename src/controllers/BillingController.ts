@@ -1,12 +1,19 @@
 import { type NextFunction, type Request, type Response } from "express"
-import { validationResult } from "express-validator"
+import { matchedData, validationResult } from "express-validator"
 import type { Logger } from "winston"
 import type { AuthRequest } from "../types/index.ts"
-import type { BillingService } from "../services/BillingService.ts"
+import type {
+    BillingService,
+    PurchaseTouch,
+} from "../services/BillingService.ts"
 import { getAuthUserId } from "../utils/index.ts"
 import { config } from "../config/index.ts"
 import type { BillingKind } from "../constants/index.ts"
 import { catalog } from "../services/CatalogService.ts"
+
+// only what the validator let through; the service reads just its own fields
+const touchOf = (req: Request): PurchaseTouch =>
+    matchedData(req, { locations: ["body"] })
 
 export default class BillingController {
     constructor(
@@ -30,7 +37,12 @@ export default class BillingController {
     async subscribe(req: AuthRequest, res: Response, next: NextFunction) {
         const { plan, trial } = req.body as { plan: string; trial?: boolean }
         await this.run(req, res, next, async (userId) => {
-            const step = await this.billing.subscribe(userId, plan, !!trial)
+            const step = await this.billing.subscribe(
+                userId,
+                plan,
+                !!trial,
+                touchOf(req),
+            )
             this.logger.info("Checkout started", { userId, plan, trial })
             return step
         })
@@ -87,7 +99,11 @@ export default class BillingController {
     ) {
         const { pack } = req.body as { pack: string }
         await this.run(req, res, next, async (userId) => {
-            const step = await this.billing.chooseProfilePack(userId, pack)
+            const step = await this.billing.chooseProfilePack(
+                userId,
+                pack,
+                touchOf(req),
+            )
             this.logger.info("Profile pack chosen", { userId, pack })
             return step
         })
@@ -99,7 +115,7 @@ export default class BillingController {
             quantity?: number
         }
         await this.run(req, res, next, (userId) =>
-            this.billing.buyMinutes(userId, pack, quantity ?? 1),
+            this.billing.buyMinutes(userId, pack, quantity ?? 1, touchOf(req)),
         )
     }
 
@@ -109,7 +125,7 @@ export default class BillingController {
             quantity?: number
         }
         await this.run(req, res, next, (userId) =>
-            this.billing.buyPalm(userId, pack, quantity ?? 1),
+            this.billing.buyPalm(userId, pack, quantity ?? 1, touchOf(req)),
         )
     }
 

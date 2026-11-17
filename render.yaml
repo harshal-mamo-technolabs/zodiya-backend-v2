@@ -21,5 +21,9 @@ services:
             sync: false
           - key: STRIPE_PUBLIC_KEY
             sync: false
+          - key: FUNNEL_URL
+            sync: false
+          - key: APP_URL
+            sync: false
           - key: STRIPE_WEBHOOK_SECRET
             sync: false

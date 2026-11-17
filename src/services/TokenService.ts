@@ -1,3 +1,4 @@
+import { createHash, createHmac } from "crypto"
 import jwt, { type JwtPayload } from "jsonwebtoken"
 import type { Model } from "mongoose"
 import type { RefreshToken } from "../models/RefreshToken.ts"
@@ -15,6 +16,40 @@ export const tokenPayload = (user: UserDocument): JwtPayload => ({
 
 /** How long a funnel-to-app sign-in token lives; it rides in a URL, so briefly. */
 const HANDOFF_MS = 2 * 60 * 1000
+
+/** How a password reset token is stored, so a database leak opens no accounts. */
+export const hashResetToken = (token: string) =>
+    createHash("sha256").update(token).digest("hex")
+
+/**
+ * Its own key, on purpose: `authenticate` accepts anything signed with
+ * PRIVATE_KEY, and this one sits in emails for a month.
+ */
+const RESUME_KEY = createHmac("sha256", config.REFRESH_TOKEN_SECRET)
+    .update("funnel-resume")
+    .digest()
+
+/** What an email link carries. It only opens the funnel: see FunnelController.resume. */
+export const resumeToken = (userId: string) =>
+    jwt.sign({ purpose: "resume" }, RESUME_KEY, {
+        algorithm: "HS256",
+        expiresIn: "30d",
+        issuer: "zodiya-backend",
+        subject: userId,
+    })
+
+/** The user a resume token names, if it is genuine and fresh. */
+export function resumeTokenUser(token: string): string | null {
+    try {
+        const payload = jwt.verify(token, RESUME_KEY, {
+            algorithms: ["HS256"],
+            issuer: "zodiya-backend",
+        }) as JwtPayload
+        return payload.purpose === "resume" ? (payload.sub ?? null) : null
+    } catch {
+        return null
+    }
+}
 
 export class TokenService {
     constructor(private refreshTokenModel: Model<RefreshToken>) {}

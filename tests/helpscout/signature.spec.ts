@@ -44,9 +44,9 @@ describe("GET /helpscout/signature", () => {
             signature: createHmac("sha256", "hs-test-key")
                 .update(userData.email)
                 .digest("hex"),
-            utm_source: "default",
-            utm_campaign: "default",
-            utm_medium: "default",
+            utm_source: "organic",
+            utm_campaign: "organic",
+            utm_medium: "organic",
         })
     })
 

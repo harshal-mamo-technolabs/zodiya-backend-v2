@@ -1,7 +1,7 @@
 import { checkSchema } from "express-validator"
 import { plan } from "./billingValidator.ts"
 import { GENDERS } from "../models/User.ts"
-import { UTM_FIELDS } from "../models/LandingPageHook.ts"
+import { EMAIL_TOUCH, UTM_FIELDS } from "../models/LandingPageHook.ts"
 
 const text = {
     optional: true,
@@ -12,13 +12,34 @@ const text = {
 
 /** A new visit: the campaign it came from, whichever of the three are given. */
 export const hookCreateValidator = checkSchema(
-    Object.fromEntries(UTM_FIELDS.map((f) => [f, text])),
+    {
+        landingPageName: text,
+        ...Object.fromEntries(
+            [...UTM_FIELDS, ...EMAIL_TOUCH].map((f) => [f, text]),
+        ),
+    },
+    ["body"],
+)
+
+/** Someone back from an email link: its token, and the campaign the link carries. */
+export const resumeValidator = checkSchema(
+    {
+        token: { isString: true, isLength: { options: { max: 2000 } } },
+        landingPageName: text,
+        ...Object.fromEntries(
+            [...UTM_FIELDS, ...EMAIL_TOUCH].map((f) => [f, text]),
+        ),
+    },
     ["body"],
 )
 
 /** What a funnel step adds to its visit. Only these fields are ever written. */
 export const hookUpdateValidator = checkSchema({
     uuid: { in: ["params"], isUUID: true },
+    landingPageName: text,
+    ...Object.fromEntries(
+        [...UTM_FIELDS, ...EMAIL_TOUCH].map((f) => [f, text]),
+    ),
     firstName: text,
     lastName: text,
     gender: { optional: true, isIn: { options: [GENDERS] } },

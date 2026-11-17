@@ -7,6 +7,7 @@ import type { Profile } from "../models/Profile.ts"
 import type { BillingGrant } from "../models/BillingGrant.ts"
 import { LandingPageHookModel } from "../models/LandingPageHook.ts"
 import {
+    passwordResetLink,
     KlaviyoEvents,
     klaviyo,
     planProfile,
@@ -143,9 +144,53 @@ const profilePackOf = async (price: PriceRef | undefined) =>
 
 // the campaign that brought the customer, on everything they buy in Stripe
 const utm = (user: UserDocument) => ({
-    utm_source: user.utm_source || "default",
-    utm_campaign: user.utm_campaign || "default",
-    utm_medium: user.utm_medium || "default",
+    utm_source: user.utm_source || "organic",
+    utm_campaign: user.utm_campaign || "organic",
+    utm_medium: user.utm_medium || "organic",
+})
+
+// an empty value counts as none
+const orOrganic = (value?: string | null) => (value?.length ? value : "organic")
+
+/** Where one purchase came from, as the request says. */
+export interface PurchaseTouch {
+    utm_campaign?: string
+    utm_medium?: string
+    flow_id?: string
+    utm_email?: string
+    hookId?: string
+}
+
+/**
+ * What made this purchase happen, for Stripe. The source is always the user's
+ * own; campaign and medium come from the link or funnel visit it came through,
+ * and are organic without one. An email link's flow id goes along, marked as Klaviyo's.
+ */
+const purchaseUtm = async (user: UserDocument, given: PurchaseTouch) => {
+    const touch = given.hookId
+        ? await LandingPageHookModel.findOne({ email: user.email })
+              .sort({ _id: -1 })
+              .lean()
+        : given
+    const email = touch?.utm_email?.length
+        ? touch.utm_email
+        : touch?.flow_id && "Klaviyo"
+    return {
+        utm_source: user.utm_source || "organic",
+        utm_campaign: orOrganic(touch?.utm_campaign),
+        utm_medium: orOrganic(touch?.utm_medium),
+        ...(touch?.flow_id ? { flow_id: touch.flow_id } : {}),
+        ...(email ? { utm_email: email } : {}),
+    }
+}
+
+/** A purchase's attribution, from its Stripe metadata, for its Klaviyo event. */
+const touchProps = (m: Stripe.Metadata) => ({
+    "astromeridian:utm_source": orOrganic(m.utm_source),
+    "astromeridian:utm_campaign": orOrganic(m.utm_campaign),
+    "astromeridian:utm_medium": orOrganic(m.utm_medium),
+    ...(m.flow_id ? { "astromeridian:flow_id": m.flow_id } : {}),
+    ...(m.utm_email ? { "astromeridian:utm_email": m.utm_email } : {}),
 })
 
 export function minutesLeft(billing: Billing | null | undefined): MinutesLeft {
@@ -293,6 +338,7 @@ export class BillingService {
         userId: string,
         tier: string,
         trial: boolean,
+        touch: PurchaseTouch = {},
     ): Promise<PaymentStep> {
         const plan = await this.onSale(tier)
         const user = await this.user(userId)
@@ -326,7 +372,11 @@ export class BillingService {
                 save_default_payment_method: "on_subscription",
                 payment_method_types: ["card"],
             },
-            metadata: { userId, kind: BillingKinds.PLAN, ...utm(user) },
+            metadata: {
+                userId,
+                kind: BillingKinds.PLAN,
+                ...(await purchaseUtm(user, touch)),
+            },
             expand: INVOICE_SECRET,
             ...(trial &&
                 offer && {
@@ -455,6 +505,7 @@ export class BillingService {
     async chooseProfilePack(
         userId: string,
         packId: string,
+        touch: PurchaseTouch = {},
     ): Promise<PaymentStep> {
         const pack = await catalog.profilePack(packId)
         if (!pack) {
@@ -531,7 +582,11 @@ export class BillingService {
                 save_default_payment_method: "on_subscription",
                 payment_method_types: ["card"],
             },
-            metadata: { userId, kind: BillingKinds.PROFILES, ...utm(user) },
+            metadata: {
+                userId,
+                kind: BillingKinds.PROFILES,
+                ...(await purchaseUtm(user, touch)),
+            },
             expand: INVOICE_SECRET,
         })
         await this.applySubscription(sub)
@@ -542,6 +597,7 @@ export class BillingService {
         userId: string,
         packId: string,
         quantity: number,
+        touch: PurchaseTouch = {},
     ): Promise<PaymentStep> {
         const pack = await catalog.minutePack(packId)
         if (!pack) {
@@ -558,6 +614,7 @@ export class BillingService {
                 pack: pack.packId,
                 quantity: String(quantity),
             },
+            touch,
         )
     }
 
@@ -565,6 +622,7 @@ export class BillingService {
         userId: string,
         packId: string,
         quantity: number,
+        touch: PurchaseTouch = {},
     ): Promise<PaymentStep> {
         const pack = await catalog.palmPack(packId)
         if (!pack) {
@@ -581,6 +639,7 @@ export class BillingService {
                 pack: pack.packId,
                 quantity: String(quantity),
             },
+            touch,
         )
     }
 
@@ -590,6 +649,7 @@ export class BillingService {
         amount: number,
         description: string,
         metadata: Record<string, string>,
+        touch: PurchaseTouch,
     ): Promise<PaymentStep> {
         const user = await this.user(userId)
         const customer = await this.customerFor(user)
@@ -599,7 +659,11 @@ export class BillingService {
             customer,
             description,
             payment_method_types: ["card"],
-            metadata: { userId, ...metadata, ...utm(user) },
+            metadata: {
+                userId,
+                ...metadata,
+                ...(await purchaseUtm(user, touch)),
+            },
         })
         return {
             clientSecret: intent.client_secret,
@@ -1176,7 +1240,7 @@ export class BillingService {
             : !wasLive && live && neverPaid.includes(was?.status)
               ? {
                     metric: KlaviyoEvents.PROFILE_PLAN_PURCHASED,
-                    properties: bought,
+                    properties: { ...bought, ...touchProps(sub.metadata) },
                     uniqueId: `profile_plan_purchased:${sub.id}`,
                 }
               : wasLive && !live && sub.status !== "past_due"
@@ -1263,27 +1327,42 @@ export class BillingService {
             $set: set,
         })
 
-        // the first payment: an event for a funnel sign-up, fields for anyone
-        // else; a renewal or change refills the balances
+        // the first payment: the funnel's event for a funnel sign-up, the plain
+        // purchase event for anyone else; a renewal or change refills the balances
         if (granted && reason === "subscription_create") {
             const fields = planProfile(sub, plan)
-            const funnel = await LandingPageHookModel.exists({
+            const funnel = await LandingPageHookModel.findOne({
                 email: user.email,
             })
+                .sort({ _id: -1 })
+                .lean()
             await klaviyo.account(
                 user._id,
                 funnel
                     ? {
                           ...fields,
                           "astromeridian:landing_page_payment_completed": true,
+                          ...(funnel.landingPageName
+                              ? {
+                                    "astromeridian:landing_page_name":
+                                        funnel.landingPageName,
+                                }
+                              : {}),
+                          // the funnel gave them no password: this is their way to one
+                          ...(await passwordResetLink(user._id)),
                       }
                     : fields,
                 funnel
                     ? {
                           metric: KlaviyoEvents.PAYMENT_COMPLETED,
                           uniqueId: `payment_completed:${invoice.id}`,
+                          properties: touchProps(sub.metadata),
                       }
-                    : undefined,
+                    : {
+                          metric: KlaviyoEvents.GENERAL_PLAN_PURCHASED,
+                          uniqueId: `general_plan_purchased:${invoice.id}`,
+                          properties: touchProps(sub.metadata),
+                      },
             )
         } else if (granted) {
             await klaviyo.account(user._id)
@@ -1357,6 +1436,7 @@ export class BillingService {
                             await catalog.settings()
                         ).currency.toUpperCase(),
                         "astromeridian:stripe_payment_intent_id": intent.id,
+                        ...touchProps(intent.metadata),
                     },
                 },
             )

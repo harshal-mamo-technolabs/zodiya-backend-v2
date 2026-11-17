@@ -7,7 +7,10 @@ import { UserModel } from "../models/User.ts"
 import type { AuthRequest } from "../types/index.ts"
 import { getAuthUserId } from "../utils/index.ts"
 
+import sidebarRouter from "./helpscoutSidebarRouter.ts"
+
 const router = express.Router()
+router.use("/sidebar", sidebarRouter)
 
 /**
  * Help Scout Beacon secure mode: the support page hands the Beacon this

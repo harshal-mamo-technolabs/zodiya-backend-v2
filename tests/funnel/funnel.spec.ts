@@ -7,6 +7,7 @@ import { UserModel } from "../../src/models/User.ts"
 import { ProfileModel } from "../../src/models/Profile.ts"
 import { LandingPageHookModel } from "../../src/models/LandingPageHook.ts"
 import { GeoService } from "../../src/services/GeoService.ts"
+import { resumeToken } from "../../src/services/TokenService.ts"
 import { geoData, profileData, resetDB, userData } from "../utils/index.ts"
 
 // no password: the funnel never asks for one
@@ -189,6 +190,172 @@ describe("funnel", () => {
         })
     })
 
+    describe("email link back into the funnel", () => {
+        const resume = (body: object) =>
+            request(app).post("/funnel/resume").send(body)
+        const newVisit = async (utm: object = {}) =>
+            (
+                (await request(app).post("/funnel/hook").send(utm)).body as {
+                    uuid: string
+                }
+            ).uuid
+        const account = async () => {
+            const hookId = await newVisit({ utm_source: "fb" })
+            const { accessToken } = (await signup({ ...signupBody, hookId }))
+                .body as { accessToken: string }
+            const user = await UserModel.findOne({ email: userData.email })
+            if (!user) throw new Error("no account was created")
+            return {
+                hookId,
+                user,
+                accessToken,
+                token: resumeToken(String(user._id)),
+            }
+        }
+
+        it("signs an unpaid account in, back at the plans", async () => {
+            const { hookId, token } = await account()
+
+            const res = await resume({ token })
+
+            expect(res.statusCode).toBe(200)
+            const body = res.body as Record<string, string>
+            expect(body).toMatchObject({
+                stage: "plans",
+                hookId,
+                firstName: userData.firstName,
+                sunSign: "leo",
+            })
+            const status = await request(app)
+                .get("/billing/status")
+                .set("Authorization", `Bearer ${String(body.accessToken)}`)
+            expect(status.statusCode).toBe(200)
+            expect(await LandingPageHookModel.countDocuments()).toBe(1)
+        })
+
+        it("returns to the checkout of the plan they had chosen", async () => {
+            const { hookId, token } = await account()
+            await request(app)
+                .patch(`/funnel/hook/${hookId}`)
+                .send({ plan: "premium", trial: true })
+
+            const res = await resume({ token })
+
+            expect(res.body).toMatchObject({
+                stage: "pay",
+                plan: "premium",
+                trial: true,
+            })
+            expect(res.body).toHaveProperty("accessToken")
+        })
+
+        it("keeps the chosen plan when the link has a new campaign", async () => {
+            const { hookId, token } = await account()
+            await request(app)
+                .patch(`/funnel/hook/${hookId}`)
+                .send({ plan: "premium" })
+
+            const res = await resume({ token, utm_campaign: "winback" })
+
+            expect(res.body).toMatchObject({ stage: "pay", plan: "premium" })
+            expect((res.body as { hookId: string }).hookId).not.toBe(hookId)
+        })
+
+        it("keeps the flow id per visit", async () => {
+            const { token, hookId } = await account()
+            await request(app)
+                .patch(`/funnel/hook/${hookId}`)
+                .send({ flow_id: "FLOW1" })
+            await resume({ token, flow_id: "FLOW2" })
+            await resume({ token, flow_id: "FLOW2" })
+
+            const visits = await LandingPageHookModel.find({
+                email: userData.email,
+            })
+                .sort({ _id: 1 })
+                .lean()
+            expect(visits.map((v) => [v.flow_id, v.utm_source])).toEqual([
+                [undefined, "fb"],
+                ["FLOW1", "fb"],
+                ["FLOW2", "fb"],
+            ])
+        })
+
+        it("does not reopen an old plan after starting over", async () => {
+            const { hookId } = await account()
+            await request(app)
+                .patch(`/funnel/hook/${hookId}`)
+                .send({ plan: "premium" })
+
+            await signup({ ...signupBody, hookId: await newVisit() })
+            const user = await UserModel.findOne({ email: userData.email })
+            const res = await resume({ token: resumeToken(String(user?._id)) })
+
+            expect((res.body as { stage: string }).stage).toBe("plans")
+        })
+
+        it("continues on a new record when the link has a new campaign", async () => {
+            const { hookId, token } = await account()
+            const utm = { utm_source: "klaviyo", utm_medium: "email" }
+
+            const res = await resume({ token, ...utm })
+            await resume({ token, ...utm }) // the same link clicked again
+            await resume({ token, utm_source: "other" }) // a source alone is no change
+
+            const hooks = await LandingPageHookModel.find().sort({ _id: 1 })
+            expect(hooks).toHaveLength(2)
+            expect(hooks[1]?.utm_source).toBe("fb")
+            expect(hooks[1]?.utm_medium).toBe("email")
+            const body = res.body as { hookId: string }
+            expect(body.hookId).toBe(hooks[1]?.uuid)
+            expect(body.hookId).not.toBe(hookId)
+        })
+
+        it("gives no session to an account with a plan", async () => {
+            const { user, token } = await account()
+            await UserModel.updateOne(
+                { _id: user._id },
+                { $set: { "billing.plan.status": "active" } },
+            )
+            const res = await resume({ token })
+            expect(res.statusCode).toBe(200)
+            expect(res.body).toEqual({ stage: "login" })
+        })
+
+        it("refuses a deleted account, or anything but a resume token", async () => {
+            const { hookId, user, accessToken, token } = await account()
+            for (const bad of ["garbage", hookId, accessToken]) {
+                expect((await resume({ token: bad })).statusCode).toBe(401)
+            }
+            await UserModel.updateOne(
+                { _id: user._id },
+                { $set: { deletedAt: new Date() } },
+            )
+            expect((await resume({ token })).statusCode).toBe(401)
+        })
+
+        it("is no use as an API token", async () => {
+            const { token } = await account()
+            const res = await request(app)
+                .get("/billing/status")
+                .set("Authorization", `Bearer ${token}`)
+            expect(res.statusCode).toBe(401)
+        })
+
+        it("cannot be had by naming someone's email at sign-up", async () => {
+            await account()
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.plan.status": "active" } },
+            )
+            const hookId = await newVisit()
+            await signup({ ...signupBody, hookId })
+
+            const res = await resume({ token: hookId })
+            expect(res.statusCode).toBe(401)
+        })
+    })
+
     describe("landing page hook", () => {
         const visit = async (utm: object = {}) =>
             (
@@ -197,12 +364,12 @@ describe("funnel", () => {
                 }
             ).uuid
 
-        it("records a visit, with 'default' for any missing utm field", async () => {
+        it("records a visit, with 'organic' for any missing utm field", async () => {
             const uuid = await visit({ utm_source: "fb", utm_medium: "" })
             const hook = await LandingPageHookModel.findOne({ uuid })
             expect(hook?.utm_source).toBe("fb")
-            expect(hook?.utm_medium).toBe("default")
-            expect(hook?.utm_campaign).toBe("default")
+            expect(hook?.utm_medium).toBe("organic")
+            expect(hook?.utm_campaign).toBe("organic")
         })
 
         it("adds each step's answers and nothing else", async () => {
@@ -239,7 +406,7 @@ describe("funnel", () => {
             const user = await UserModel.findOne({ email: userData.email })
             expect(user?.utm_source).toBe("fb")
             expect(user?.utm_medium).toBe("cpc")
-            expect(user?.utm_campaign).toBe("default")
+            expect(user?.utm_campaign).toBe("organic")
         })
 
         it("marks the email on sign-up, payment not started", async () => {
@@ -263,12 +430,8 @@ describe("funnel", () => {
             expect(res.statusCode).toBe(201)
             expect(await UserModel.exists({ _id: old._id })).toBeNull()
             expect(await ProfileModel.countDocuments({ user: old._id })).toBe(0)
-            expect(
-                await LandingPageHookModel.exists({ uuid: first }),
-            ).toBeNull()
-            expect(
-                await LandingPageHookModel.exists({ uuid: second }),
-            ).not.toBeNull()
+            // both visits stay, each with its own campaign
+            expect(await LandingPageHookModel.countDocuments()).toBe(2)
         })
 
         it("sends a returning visitor with a plan to log in", async () => {
@@ -283,7 +446,210 @@ describe("funnel", () => {
             expect(await UserModel.countDocuments()).toBe(1)
             expect(
                 await LandingPageHookModel.exists({ uuid: hookId }),
-            ).toBeNull()
+            ).not.toBeNull()
+        })
+
+        const email = userData.email.toLowerCase()
+        const campaign = { utm_source: "klaviyo", utm_medium: "email" }
+
+        it("updates the campaign in place while the email is unknown", async () => {
+            const uuid = await visit({ utm_source: "fb", utm_medium: "cpc" })
+            await request(app)
+                .patch(`/funnel/hook/${uuid}`)
+                .send({ ...campaign, utm_campaign: "" })
+            expect(await LandingPageHookModel.countDocuments()).toBe(1)
+            expect(
+                await LandingPageHookModel.findOne({ uuid }).lean(),
+            ).toMatchObject({
+                utm_source: "fb",
+                utm_medium: "email",
+                utm_campaign: "organic",
+            })
+        })
+
+        it("copies the record for a new campaign, and keeps all in step", async () => {
+            const uuid = await visit({ utm_source: "fb", utm_medium: "cpc" })
+            await request(app)
+                .patch(`/funnel/hook/${uuid}`)
+                .send({ firstName: "Ana" })
+            await signup({ ...signupBody, hookId: uuid })
+
+            const landed = () =>
+                request(app).patch(`/funnel/hook/${uuid}`).send(campaign)
+            await landed()
+            await landed() // the same link again is no new campaign
+
+            const hooks = await LandingPageHookModel.find({ email })
+                .sort({ _id: 1 })
+                .lean()
+            expect(hooks).toHaveLength(2)
+            expect(hooks[0]).toMatchObject({ uuid, utm_source: "fb" })
+            expect(hooks[1]).toMatchObject({
+                firstName: "Ana",
+                utm_source: "fb",
+                utm_medium: "email",
+                utm_campaign: "organic",
+            })
+            expect(hooks[1]?.uuid).not.toBe(uuid)
+
+            await request(app)
+                .patch(`/funnel/hook/${uuid}`)
+                .send({ firstName: "Ann", plan: "premium" })
+            const after = await LandingPageHookModel.find({ email }).lean()
+            for (const h of after) {
+                expect(h).toMatchObject({ firstName: "Ann", plan: "premium" })
+            }
+            expect(after.map((h) => h.utm_medium).sort()).toEqual([
+                "cpc",
+                "email",
+            ])
+        })
+
+        it("links a paying customer's new visit without taking its answers", async () => {
+            const first = await visit({ utm_source: "fb" })
+            await request(app)
+                .patch(`/funnel/hook/${first}`)
+                .send({ firstName: "Ana" })
+            await signup({ ...signupBody, hookId: first })
+            await UserModel.updateOne(
+                { email: userData.email },
+                { $set: { "billing.plan.status": "active" } },
+            )
+
+            const second = await visit(campaign)
+            await request(app)
+                .patch(`/funnel/hook/${second}`)
+                .send({ firstName: "Mallory" })
+            const res = await signup({ ...signupBody, hookId: second })
+
+            expect(res.statusCode).toBe(409)
+            const hooks = await LandingPageHookModel.find({ email })
+                .sort({ _id: 1 })
+                .lean()
+            expect(hooks.map((h) => h.firstName)).toEqual(["Ana", "Ana"])
+            expect(hooks.map((h) => h.utm_source)).toEqual(["fb", "fb"])
+            expect(hooks.map((h) => h.utm_medium)).toEqual(["organic", "email"])
+        })
+
+        it("keeps the landing page name per record", async () => {
+            const first = await visit({
+                utm_medium: "cpc",
+                landingPageName: "landing-page-1",
+            })
+            await signup({ ...signupBody, hookId: first })
+
+            // a new campaign's copy carries the name it arrived with
+            await request(app)
+                .patch(`/funnel/hook/${first}`)
+                .send({ utm_medium: "email" })
+            const copy = await LandingPageHookModel.findOne({
+                utm_medium: "email",
+            }).lean()
+            expect(copy?.landingPageName).toBe("landing-page-1")
+
+            // answers are shared across the email's records, the name is not
+            const second = await visit({ landingPageName: "landing-page-2" })
+            await signup({ ...signupBody, hookId: second })
+            const names = await LandingPageHookModel.find()
+                .sort({ _id: 1 })
+                .lean()
+            expect(names.map((h) => h.landingPageName)).toEqual([
+                "landing-page-1",
+                "landing-page-1",
+                "landing-page-2",
+            ])
+        })
+
+        it("gets the name from an update if the first request was lost", async () => {
+            const uuid = "6a1c2f30-8d1e-4a7b-9c55-2e7b1d3f4a10"
+            await request(app)
+                .patch(`/funnel/hook/${uuid}`)
+                .send({ landingPageName: "landing-page-1" })
+            expect(
+                (await LandingPageHookModel.findOne({ uuid }).lean())
+                    ?.landingPageName,
+            ).toBe("landing-page-1")
+        })
+
+        it("never changes the source of a record, even with no email yet", async () => {
+            const uuid = await visit({ utm_source: "fb" })
+            await request(app)
+                .patch(`/funnel/hook/${uuid}`)
+                .send({ utm_source: "tiktok", utm_campaign: "spring" })
+            expect(
+                await LandingPageHookModel.findOne({ uuid }).lean(),
+            ).toMatchObject({ utm_source: "fb", utm_campaign: "spring" })
+        })
+
+        it("takes the source of a record whose first request was lost", async () => {
+            const uuid = "4b0f6a1e-3c55-4d0a-9d6e-6f1f6c9a2b11"
+            await request(app)
+                .patch(`/funnel/hook/${uuid}`)
+                .send({ utm_source: "fb" })
+            expect(
+                (await LandingPageHookModel.findOne({ uuid }).lean())
+                    ?.utm_source,
+            ).toBe("fb")
+        })
+
+        it("keeps the account's first campaign when they start over", async () => {
+            await signup({
+                ...signupBody,
+                hookId: await visit({
+                    utm_source: "fb",
+                    utm_campaign: "launch",
+                    utm_medium: "cpc",
+                }),
+            })
+
+            const second = await visit({
+                utm_source: "klaviyo",
+                utm_campaign: "winback",
+                utm_medium: "email",
+            })
+            const res = await signup({ ...signupBody, hookId: second })
+
+            expect(res.statusCode).toBe(201)
+            expect(
+                await UserModel.findOne({ email: userData.email }).lean(),
+            ).toMatchObject({
+                utm_source: "fb",
+                utm_campaign: "launch",
+                utm_medium: "cpc",
+            })
+            // the new visit keeps its own campaign, under the first source
+            expect(
+                await LandingPageHookModel.findOne({ uuid: second }).lean(),
+            ).toMatchObject({
+                utm_source: "fb",
+                utm_campaign: "winback",
+                utm_medium: "email",
+            })
+        })
+
+        it("refuses every later write to the account's utm fields", async () => {
+            await signup({
+                ...signupBody,
+                hookId: await visit({ utm_source: "fb", utm_medium: "cpc" }),
+            })
+            const filter = { email: userData.email }
+            const changed = {
+                utm_source: "x",
+                utm_campaign: "x",
+                utm_medium: "x",
+            }
+
+            await UserModel.updateOne(filter, { $set: changed })
+            await UserModel.findOneAndUpdate(filter, { $set: changed })
+            const doc = await UserModel.findOne(filter)
+            doc?.set(changed)
+            await doc?.save()
+
+            expect(await UserModel.findOne(filter).lean()).toMatchObject({
+                utm_source: "fb",
+                utm_campaign: "organic",
+                utm_medium: "cpc",
+            })
         })
     })
 })
