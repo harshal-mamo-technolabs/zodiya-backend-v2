@@ -7,21 +7,22 @@
     "type": "module",
     "main": "index.js",
     "scripts": {
-        "build": "tsc -p tsconfig.build.json",
+        "build": "tsc -p tsconfig.build.json && npm run helpscout:build",
         "start": "cross-env NODE_ENV=production node dist/server.js",
-        "dev": "cross-env NODE_ENV=development nodemon --ext ts --exec \"node --import @swc-node/register/esm-register\" src/server.ts",
+        "dev": "npm run helpscout:build && cross-env NODE_ENV=development nodemon --ext ts --exec \"node --import @swc-node/register/esm-register\" src/server.ts",
         "test": "NODE_OPTIONS=--experimental-vm-modules jest --no-cache --coverage --all --runInBand",
         "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch --runInBand",
         "format:check": "prettier --check .",
         "format:fix": "prettier --write .",
         "lint:check": "eslint .",
         "lint:fix": "eslint --fix .",
-        "typecheck": "tsc --noEmit",
+        "typecheck": "tsc --noEmit && tsc -p src/browser/tsconfig.json",
         "keys:generate": "node scripts/generateKeys.js",
         "astrologer:setup": "node --import @swc-node/register/esm-register scripts/setupAstrologerAgents.ts",
         "prepare": "husky",
         "stripe:setup": "node --import @swc-node/register/esm-register scripts/setupStripe.ts",
-        "billing:seed": "node --import @swc-node/register/esm-register scripts/seedBilling.ts"
+        "billing:seed": "node --import @swc-node/register/esm-register scripts/seedBilling.ts",
+        "helpscout:build": "tsc -p src/browser/tsconfig.json && esbuild src/browser/helpscoutSidebar.ts --bundle --platform=browser --target=es2022 --outfile=dist/public/helpscout-sidebar.js"
     },
     "lint-staged": {
         "*.ts": [
@@ -52,6 +53,7 @@
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
+        "@helpscout/javascript-sdk": "^0.10.0",
         "@jest/globals": "^30.5.1",
         "@swc-node/register": "^1.12.1",
         "@swc/core": "^1.16.2",
@@ -66,6 +68,7 @@
         "@types/pdfkit": "^0.17.6",
         "@types/supertest": "^7.2.1",
         "cross-env": "^10.1.0",
+        "esbuild": "^0.28.2",
         "eslint": "^10.10.0",
         "eslint-config-prettier": "^10.1.8",
         "husky": "^9.1.7",
@@ -84,6 +87,7 @@
         "mongodb-memory-server@11.2.0": true,
         "@swc/core@1.16.2": true,
         "unrs-resolver@1.12.2": true,
-        "@parcel/watcher@2.6.0": true
+        "@parcel/watcher@2.6.0": true,
+        "esbuild@0.28.2": true
     }
 }
