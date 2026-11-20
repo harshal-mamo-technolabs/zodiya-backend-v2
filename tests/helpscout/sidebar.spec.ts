@@ -2,6 +2,7 @@ import { createHmac } from "crypto"
 import { jest } from "@jest/globals"
 import request from "supertest"
 import jwt from "jsonwebtoken"
+import createHttpError from "http-errors"
 import { MongoMemoryServer } from "mongodb-memory-server"
 import app from "../../src/app.ts"
 import { config } from "../../src/config/index.ts"
@@ -58,6 +59,141 @@ describe("Help Scout agent sidebar", () => {
     afterAll(async () => {
         await disconnectDB()
         await mongod.stop()
+    })
+
+    async function liveToken() {
+        const response = await request(app).get(
+            url({ "user-id": "456", "installation-ids": "app-test" }),
+        )
+        expect(response.status).toBe(200)
+        expect(response.text).toContain("Loading the customer from Help Scout")
+        expect(response.text).toContain("/helpscout/sidebar/client.js")
+        const value = /data-token="([^"]+)"/.exec(response.text)?.[1]
+        if (!value) throw new Error("Missing context token")
+        return value
+    }
+
+    it("loads a live chat customer without requiring a conversation ID", async () => {
+        const authorize = jest
+            .spyOn(helpScout, "authorizeAgent")
+            .mockResolvedValue()
+        const emails = jest
+            .spyOn(helpScout, "customerEmails")
+            .mockResolvedValue([userData.email])
+        const response = await request(app)
+            .post("/helpscout/sidebar/context")
+            .send({
+                token: await liveToken(),
+                customerId: "789",
+                mailboxId: "350186",
+                email: "untrusted@example.com",
+                agentId: "attacker",
+            })
+        expect(response.status).toBe(200)
+        expect(response.text).toContain(userData.email)
+        expect(authorize).toHaveBeenCalledWith("456")
+        expect(emails).toHaveBeenCalledWith("789")
+        expect(conversationMock).not.toHaveBeenCalled()
+    })
+
+    it("requires a valid agent bootstrap token to resolve live context", async () => {
+        const emails = jest.spyOn(helpScout, "customerEmails")
+        expect(
+            (
+                await request(app)
+                    .post("/helpscout/sidebar/context")
+                    .send({ customerId: "789", token: "forged" })
+            ).status,
+        ).toBe(401)
+        const ordinary = await request(app).get(url())
+        expect(
+            (
+                await request(app)
+                    .post("/helpscout/sidebar/context")
+                    .send({ customerId: "789", token: token(ordinary.text) })
+            ).status,
+        ).toBe(401)
+        expect(emails).not.toHaveBeenCalled()
+    })
+
+    it("rejects live context from another inbox", async () => {
+        const authorize = jest.spyOn(helpScout, "authorizeAgent")
+        expect(
+            (
+                await request(app)
+                    .post("/helpscout/sidebar/context")
+                    .send({
+                        token: await liveToken(),
+                        customerId: "789",
+                        mailboxId: "365852",
+                    })
+            ).status,
+        ).toBe(403)
+        expect(authorize).not.toHaveBeenCalled()
+    })
+
+    it("checks the signed agent's actual inbox permission before reading live customer data", async () => {
+        jest.spyOn(helpScout, "authorizeAgent").mockRejectedValue(
+            createHttpError(403, "No inbox access"),
+        )
+        const emails = jest.spyOn(helpScout, "customerEmails")
+        expect(
+            (
+                await request(app)
+                    .post("/helpscout/sidebar/context")
+                    .send({ token: await liveToken(), customerId: "789" })
+            ).status,
+        ).toBe(403)
+        expect(emails).not.toHaveBeenCalled()
+    })
+
+    it("rechecks the live customer before cancelling a subscription", async () => {
+        jest.spyOn(helpScout, "authorizeAgent").mockResolvedValue()
+        const emails = jest
+            .spyOn(helpScout, "customerEmails")
+            .mockResolvedValue([userData.email])
+        const response = await request(app)
+            .post("/helpscout/sidebar/context")
+            .send({ token: await liveToken(), customerId: "789" })
+        emails.mockResolvedValue(["different@example.com"])
+        const cancel = jest.spyOn(
+            BillingService.prototype,
+            "setProfilesCancelAtPeriodEnd",
+        )
+        expect(
+            (
+                await request(app)
+                    .post("/helpscout/sidebar/cancel")
+                    .type("form")
+                    .send({
+                        token: token(response.text),
+                        kind: "profiles",
+                        confirmed: "yes",
+                    })
+            ).status,
+        ).toBe(404)
+        expect(cancel).not.toHaveBeenCalled()
+    })
+
+    it("refreshes a live-chat session with its customer binding intact", async () => {
+        jest.spyOn(helpScout, "authorizeAgent").mockResolvedValue()
+        jest.spyOn(helpScout, "customerEmails").mockResolvedValue([
+            userData.email,
+        ])
+        const response = await request(app)
+            .post("/helpscout/sidebar/context")
+            .send({ token: await liveToken(), customerId: "789" })
+        const refreshed = await request(app)
+            .post("/helpscout/sidebar/refresh")
+            .type("form")
+            .send({ token: token(response.text) })
+        expect(refreshed.status).toBe(200)
+        expect(refreshed.text).toContain(userData.email)
+        expect(jwt.decode(token(refreshed.text))).toMatchObject({
+            customerId: "789",
+            conversationId: "",
+            agentId: "456",
+        })
     })
 
     it("rejects unsigned or modified callbacks before looking up customer data", async () => {

@@ -42,6 +42,83 @@ export class HelpScoutService {
         return data as Conversation
     }
 
+    /** A signed sidebar actor must actually have access to this product's inbox. */
+    async authorizeAgent(agentId: string) {
+        for (let page = 1; ; page++) {
+            const data = (await this.read(
+                `users?mailbox=${config.HELPSCOUT_INBOX_ID}&page=${String(page)}`,
+            )) as {
+                _embedded?: {
+                    users?: { id: number; role: string; type: string }[]
+                }
+                page?: { totalPages?: number }
+            }
+            const users = data._embedded?.users
+            if (!Array.isArray(users))
+                throw createHttpError(
+                    502,
+                    "Could not verify Help Scout inbox access.",
+                )
+            if (
+                users.some(
+                    (u) =>
+                        String(u.id) === agentId &&
+                        u.type === "user" &&
+                        ["owner", "admin", "user"].includes(u.role),
+                )
+            )
+                return
+            const pages = data.page?.totalPages ?? 1
+            if (!Number.isSafeInteger(pages) || page >= pages) break
+        }
+        throw createHttpError(
+            403,
+            "This agent does not have access to the zodiya inbox.",
+        )
+    }
+
+    async customerEmails(id: string) {
+        const data = (await this.read(`customers/${id}`)) as {
+            id?: number
+            _embedded?: { emails?: { value?: string }[] }
+        }
+        if (data.id !== Number(id) || !Array.isArray(data._embedded?.emails)) {
+            throw createHttpError(
+                502,
+                "Help Scout returned an incomplete customer.",
+            )
+        }
+        const emails = data._embedded.emails
+            .map((e) => e.value?.trim().toLowerCase())
+            .filter((e): e is string => !!e)
+        if (!emails.length)
+            throw createHttpError(
+                404,
+                "This Help Scout customer has no email address. Add their account email in Help Scout, then refresh.",
+            )
+        return emails
+    }
+
+    private async read(resource: string): Promise<unknown> {
+        const response = await fetch(
+            `https://api.helpscout.net/v2/${resource}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${await this.accessToken()}`,
+                },
+                signal: AbortSignal.timeout(10000),
+                redirect: "error",
+            },
+        )
+        if (response.status === 401) this.token = null
+        if (!response.ok)
+            throw createHttpError(
+                502,
+                "Could not verify the Help Scout customer or inbox access. Reload and try again.",
+            )
+        return response.json()
+    }
+
     private async accessToken() {
         if (this.token && this.token.expires > Date.now())
             return this.token.value

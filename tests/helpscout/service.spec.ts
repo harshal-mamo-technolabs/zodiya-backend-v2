@@ -66,6 +66,86 @@ describe("Help Scout Inbox API", () => {
             new HelpScoutService().conversation("123"),
         ).rejects.toThrow("Could not authenticate")
     })
+    it("verifies agent access to the configured inbox across all pages", async () => {
+        jest.replaceProperty(config, "HELPSCOUT_INBOX_ID", "350186")
+        fetchMock
+            .mockResolvedValueOnce(
+                Response.json({ access_token: "token", expires_in: 172800 }),
+            )
+            .mockResolvedValueOnce(
+                Response.json({
+                    _embedded: {
+                        users: [{ id: 1, type: "user", role: "user" }],
+                    },
+                    page: { totalPages: 2 },
+                }),
+            )
+            .mockResolvedValueOnce(
+                Response.json({
+                    _embedded: {
+                        users: [{ id: 456, type: "user", role: "user" }],
+                    },
+                    page: { totalPages: 2 },
+                }),
+            )
+        await expect(
+            new HelpScoutService().authorizeAgent("456"),
+        ).resolves.toBeUndefined()
+        expect(fetchMock).toHaveBeenNthCalledWith(
+            3,
+            "https://api.helpscout.net/v2/users?mailbox=350186&page=2",
+            expect.any(Object),
+        )
+    })
+    it("denies agents outside the inbox and light users", async () => {
+        fetchMock
+            .mockResolvedValueOnce(
+                Response.json({ access_token: "token", expires_in: 172800 }),
+            )
+            .mockResolvedValueOnce(
+                Response.json({
+                    _embedded: {
+                        users: [{ id: 456, type: "user", role: "light user" }],
+                    },
+                }),
+            )
+        await expect(
+            new HelpScoutService().authorizeAgent("456"),
+        ).rejects.toThrow("does not have access")
+    })
+    it("reads verified email addresses from Help Scout instead of the browser", async () => {
+        fetchMock
+            .mockResolvedValueOnce(
+                Response.json({ access_token: "token", expires_in: 172800 }),
+            )
+            .mockResolvedValueOnce(
+                Response.json({
+                    id: 789,
+                    _embedded: {
+                        emails: [{ value: " Customer@Example.com " }],
+                    },
+                }),
+            )
+        await expect(
+            new HelpScoutService().customerEmails("789"),
+        ).resolves.toEqual(["customer@example.com"])
+    })
+    it("rejects a mismatched customer identity returned by the API", async () => {
+        fetchMock
+            .mockResolvedValueOnce(
+                Response.json({ access_token: "token", expires_in: 172800 }),
+            )
+            .mockResolvedValueOnce(
+                Response.json({
+                    id: 790,
+                    _embedded: { emails: [{ value: "customer@example.com" }] },
+                }),
+            )
+        await expect(
+            new HelpScoutService().customerEmails("789"),
+        ).rejects.toThrow("incomplete customer")
+    })
+
     it("requires Inbox API credentials", async () => {
         jest.replaceProperty(config, "HELPSCOUT_MAILBOX_APP_SECRET", "")
         await expect(

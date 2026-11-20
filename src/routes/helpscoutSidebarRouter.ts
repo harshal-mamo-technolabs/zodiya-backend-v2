@@ -1,3 +1,4 @@
+import { fileURLToPath } from "url"
 import { createHmac, timingSafeEqual } from "crypto"
 import express, {
     type Request,
@@ -19,15 +20,18 @@ import {
     STAY_OPTIONS,
     renderSidebar,
     sidebarMessage,
+    sidebarPage,
 } from "../views/helpscoutSidebar.ts"
 
 const router = express.Router()
 const billing = new BillingService(UserModel, ProfileModel, BillingGrantModel)
 const audience = "helpscout-sidebar"
+const contextAudience = "helpscout-context"
 interface Session {
     userId: string
     email: string
     conversationId: string
+    customerId?: string
     agentId: string
     planId: string | null
     profilesId: string | null
@@ -39,7 +43,7 @@ router.use((_, res, next) => {
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy":
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors https://secure.helpscout.net; base-uri 'none'",
+            "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors https://secure.helpscout.net; base-uri 'none'",
     })
     next()
 })
@@ -67,10 +71,25 @@ function secret() {
 }
 
 function issue(session: Session) {
-    const { userId, email, conversationId, agentId, planId, profilesId } =
-        session
+    const {
+        userId,
+        email,
+        conversationId,
+        customerId,
+        agentId,
+        planId,
+        profilesId,
+    } = session
     return jwt.sign(
-        { userId, email, conversationId, agentId, planId, profilesId },
+        {
+            userId,
+            email,
+            conversationId,
+            customerId,
+            agentId,
+            planId,
+            profilesId,
+        },
         secret(),
         {
             algorithm: "HS256",
@@ -94,7 +113,15 @@ function sessionOf(req: Request): Session {
             audience,
             issuer: audience,
         }) as Session
-        if (!data.userId || !data.email || !/^\d+$/.test(data.conversationId))
+        if (
+            !data.userId ||
+            !data.email ||
+            !(
+                /^\d+$/.test(data.conversationId) ||
+                (data.conversationId === "" &&
+                    /^\d+$/.test(data.customerId ?? ""))
+            )
+        )
             throw new Error("Invalid session")
         return data
     } catch {
@@ -136,9 +163,32 @@ async function render(
             await billing.status(session.userId),
             message,
             error,
+            {
+                token: contextToken(session.agentId),
+                contextId: session.customerId
+                    ? `customer:${session.customerId}`
+                    : `conversation:${session.conversationId}`,
+            },
         ),
     )
 }
+
+function contextToken(agentId: string) {
+    return jwt.sign({ agentId }, secret(), {
+        algorithm: "HS256",
+        audience: contextAudience,
+        issuer: audience,
+        expiresIn: "15m",
+    })
+}
+
+router.get("/client.js", (_req, res) => {
+    res.sendFile(
+        fileURLToPath(
+            new URL("../../dist/public/helpscout-sidebar.js", import.meta.url),
+        ),
+    )
+})
 
 router.get("/", async (req, res) => {
     try {
@@ -166,11 +216,23 @@ router.get("/", async (req, res) => {
             )
         }
         const conversationId = params["conversation-id"]
-        if (!conversationId || !/^\d+$/.test(conversationId))
-            throw createHttpError(
-                400,
-                "Open a conversation to manage its subscription.",
+        if (!conversationId) {
+            const agentId = params["user-id"]
+            if (!agentId || !/^\d+$/.test(agentId))
+                throw createHttpError(
+                    401,
+                    "Help Scout did not supply an agent identity. Reload this sidebar.",
+                )
+            res.type("html").send(
+                sidebarPage(
+                    '<p role="status">Loading the customer from Help Scout…</p>',
+                    { token: contextToken(agentId), contextId: "" },
+                ),
             )
+            return
+        }
+        if (!/^\d+$/.test(conversationId))
+            throw createHttpError(400, "Invalid Help Scout conversation ID.")
         const user = await customer(conversationId)
         await render(res, {
             userId: String(user._id),
@@ -193,10 +255,87 @@ router.get("/", async (req, res) => {
     }
 })
 
+async function liveCustomer(customerId: string, agentId: string) {
+    await helpScout.authorizeAgent(agentId)
+    const emails = await helpScout.customerEmails(customerId)
+    const users = await UserModel.find({ email: { $in: emails } })
+        .select("email billing")
+        .limit(2)
+    const [user] = users
+    if (!user)
+        throw createHttpError(
+            404,
+            "No AstroMeridian account matches this Help Scout customer's email.",
+        )
+    if (users.length !== 1)
+        throw createHttpError(
+            409,
+            "This Help Scout contact matches multiple accounts. Use a contact with only the requested account's email.",
+        )
+    return user
+}
+
+router.post("/context", async (req, res) => {
+    const body = req.body as Record<string, unknown>
+    let agentId: string
+    try {
+        if (typeof body.token !== "string") throw new Error("Missing token")
+        const claims = jwt.verify(body.token, secret(), {
+            algorithms: ["HS256"],
+            audience: contextAudience,
+            issuer: audience,
+        }) as { agentId: string }
+        if (!/^\d+$/.test(claims.agentId)) throw new Error("Missing agent")
+        agentId = claims.agentId
+    } catch {
+        throw createHttpError(
+            401,
+            "This sidebar session expired. Reload the conversation in Help Scout.",
+        )
+    }
+    if (
+        body.mailboxId !== undefined &&
+        body.mailboxId !== config.HELPSCOUT_INBOX_ID &&
+        body.mailboxId !== Number(config.HELPSCOUT_INBOX_ID)
+    )
+        throw createHttpError(
+            403,
+            "This app is available only in the zodiya inbox.",
+        )
+    const conversationId =
+        typeof body.conversationId === "string" &&
+        /^\d+$/.test(body.conversationId)
+            ? body.conversationId
+            : ""
+    const customerId =
+        typeof body.customerId === "string" && /^\d+$/.test(body.customerId)
+            ? body.customerId
+            : ""
+    if (!conversationId && !customerId)
+        throw createHttpError(
+            400,
+            "Select a Help Scout customer to manage their subscription.",
+        )
+    const user = conversationId
+        ? await customer(conversationId)
+        : await liveCustomer(customerId, agentId)
+    await render(res, {
+        userId: String(user._id),
+        email: user.email,
+        conversationId,
+        ...(conversationId ? {} : { customerId }),
+        agentId,
+        planId: user.billing?.plan?.subscriptionId ?? null,
+        profilesId: user.billing?.profiles?.subscriptionId ?? null,
+    })
+})
+
 async function boundSession(req: Request) {
     const session = sessionOf(req)
     // Recheck inbox and customer: conversations can be moved or reassigned after rendering.
-    const user = await customer(session.conversationId)
+    const user = session.customerId
+        ? await liveCustomer(session.customerId, session.agentId)
+        : await customer(session.conversationId)
     if (String(user._id) !== session.userId || user.email !== session.email) {
         throw createHttpError(
             409,
@@ -286,6 +425,7 @@ router.post("/cancel", async (req, res) => {
         logger.info("Help Scout subscription renewal cancelled", {
             userId: session.userId,
             conversationId: session.conversationId,
+            helpScoutCustomerId: session.customerId,
             agentId: session.agentId,
             kind,
             subscriptionId: currentId,
