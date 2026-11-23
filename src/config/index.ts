@@ -54,6 +54,8 @@ export const config = {
     HELPSCOUT_SECURE_MODE_KEY: process.env.HELPSCOUT_SECURE_MODE_KEY ?? "",
     // Agent sidebar authentication is separate from customer Beacon secure mode.
     HELPSCOUT_SIDEBAR_SECRET: process.env.HELPSCOUT_SIDEBAR_SECRET ?? "",
+    HELPSCOUT_PROFILE_SIDEBAR_SECRET:
+        process.env.HELPSCOUT_PROFILE_SIDEBAR_SECRET ?? "",
     HELPSCOUT_INBOX_ID: process.env.HELPSCOUT_INBOX_ID ?? "",
     HELPSCOUT_MAILBOX_APP_ID: process.env.HELPSCOUT_MAILBOX_APP_ID ?? "",
     HELPSCOUT_MAILBOX_APP_SECRET:

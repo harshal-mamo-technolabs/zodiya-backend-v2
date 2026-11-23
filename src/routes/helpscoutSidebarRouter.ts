@@ -10,6 +10,8 @@ import jwt from "jsonwebtoken"
 import { rateLimit } from "express-rate-limit"
 import { config } from "../config/index.ts"
 import logger from "../config/logger.ts"
+import { klaviyo } from "../services/KlaviyoService.ts"
+import { renderKlaviyoSidebar } from "../views/klaviyoSidebar.ts"
 import { UserModel } from "../models/User.ts"
 import { ProfileModel } from "../models/Profile.ts"
 import { BillingGrantModel } from "../models/BillingGrant.ts"
@@ -27,6 +29,7 @@ const router = express.Router()
 const billing = new BillingService(UserModel, ProfileModel, BillingGrantModel)
 const audience = "helpscout-sidebar"
 const contextAudience = "helpscout-context"
+const profileAudience = "helpscout-klaviyo-context"
 interface Session {
     userId: string
     email: string
@@ -173,10 +176,10 @@ async function render(
     )
 }
 
-function contextToken(agentId: string) {
+function contextToken(agentId: string, profile = false) {
     return jwt.sign({ agentId }, secret(), {
         algorithm: "HS256",
-        audience: contextAudience,
+        audience: profile ? profileAudience : contextAudience,
         issuer: audience,
         expiresIn: "15m",
     })
@@ -190,31 +193,38 @@ router.get("/client.js", (_req, res) => {
     )
 })
 
+function signedParams(req: Request, profile = false) {
+    const key = profile
+        ? config.HELPSCOUT_PROFILE_SIDEBAR_SECRET || secret()
+        : secret()
+    const params: Record<string, string> = {}
+    const query = new URL(req.originalUrl, "https://sidebar.invalid")
+        .searchParams
+    for (const [name, value] of query) {
+        if (Object.hasOwn(params, name))
+            throw createHttpError(401, "Invalid Help Scout signature.")
+        params[name] = value
+    }
+    const signature = params["X-HelpScout-Signature"] ?? ""
+    delete params["X-HelpScout-Signature"]
+    const expected = createHmac("sha1", key)
+        .update(JSON.stringify(params))
+        .digest("base64")
+    if (
+        Buffer.byteLength(signature) !== Buffer.byteLength(expected) ||
+        !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+    ) {
+        throw createHttpError(
+            401,
+            "Open this app from a Help Scout conversation.",
+        )
+    }
+    return params
+}
+
 router.get("/", async (req, res) => {
     try {
-        const key = secret()
-        const params: Record<string, string> = {}
-        const query = new URL(req.originalUrl, "https://sidebar.invalid")
-            .searchParams
-        for (const [name, value] of query) {
-            if (Object.hasOwn(params, name))
-                throw createHttpError(401, "Invalid Help Scout signature.")
-            params[name] = value
-        }
-        const signature = params["X-HelpScout-Signature"] ?? ""
-        delete params["X-HelpScout-Signature"]
-        const expected = createHmac("sha1", key)
-            .update(JSON.stringify(params))
-            .digest("base64")
-        if (
-            Buffer.byteLength(signature) !== Buffer.byteLength(expected) ||
-            !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-        ) {
-            throw createHttpError(
-                401,
-                "Open this app from a Help Scout conversation.",
-            )
-        }
+        const params = signedParams(req)
         const conversationId = params["conversation-id"]
         if (!conversationId) {
             const agentId = params["user-id"]
@@ -275,14 +285,14 @@ async function liveCustomer(customerId: string, agentId: string) {
     return user
 }
 
-router.post("/context", async (req, res) => {
+function contextRequest(req: Request, profile = false) {
     const body = req.body as Record<string, unknown>
     let agentId: string
     try {
         if (typeof body.token !== "string") throw new Error("Missing token")
         const claims = jwt.verify(body.token, secret(), {
             algorithms: ["HS256"],
-            audience: contextAudience,
+            audience: profile ? profileAudience : contextAudience,
             issuer: audience,
         }) as { agentId: string }
         if (!/^\d+$/.test(claims.agentId)) throw new Error("Missing agent")
@@ -316,6 +326,11 @@ router.post("/context", async (req, res) => {
             400,
             "Select a Help Scout customer to manage their subscription.",
         )
+    return { conversationId, customerId, agentId }
+}
+
+router.post("/context", async (req, res) => {
+    const { conversationId, customerId, agentId } = contextRequest(req)
     const user = conversationId
         ? await customer(conversationId)
         : await liveCustomer(customerId, agentId)
@@ -328,6 +343,76 @@ router.post("/context", async (req, res) => {
         planId: user.billing?.plan?.subscriptionId ?? null,
         profilesId: user.billing?.profiles?.subscriptionId ?? null,
     })
+})
+
+// The profile app uses the same signed context flow, without issuing billing tokens.
+router.get("/klaviyo", (req, res) => {
+    try {
+        const params = signedParams(req, true)
+        const agentId = params["user-id"] ?? ""
+        if (!/^\d+$/.test(agentId))
+            throw createHttpError(
+                401,
+                "Help Scout did not supply an agent identity.",
+            )
+        res.type("html").send(
+            sidebarPage(
+                '<p role="status">Loading the customer from Help Scout…</p>',
+                {
+                    token: contextToken(agentId, true),
+                    contextId: "",
+                },
+                "klaviyo",
+            ),
+        )
+    } catch (error) {
+        res.status(isHttpError(error) ? error.statusCode : 500)
+            .type("html")
+            .send(
+                sidebarPage(
+                    '<p role="alert">Open Klaviyo Profile from a Help Scout conversation, or reload the sidebar.</p>',
+                    undefined,
+                    "klaviyo",
+                ),
+            )
+    }
+})
+
+router.post("/klaviyo/context", async (req, res) => {
+    const { conversationId, customerId, agentId } = contextRequest(req, true)
+    await helpScout.authorizeAgent(agentId)
+    let email: string
+    if (conversationId) {
+        const conversation = await helpScout.conversation(conversationId)
+        if (String(conversation.mailboxId) !== config.HELPSCOUT_INBOX_ID)
+            throw createHttpError(
+                403,
+                "This profile app is available only in the AstroMeridian inbox.",
+            )
+        email = conversation.primaryCustomer.email.trim().toLowerCase()
+    } else {
+        const emails = [...new Set(await helpScout.customerEmails(customerId))]
+        if (emails.length !== 1)
+            throw createHttpError(
+                409,
+                "This contact has multiple emails. Open a conversation with the requested account's primary email.",
+            )
+        email = emails[0] ?? ""
+    }
+    const profile = await klaviyo.profileByEmail(email)
+    res.type("html").send(
+        renderKlaviyoSidebar(
+            profile,
+            email,
+            {
+                token: contextToken(agentId, true),
+                contextId: conversationId
+                    ? `conversation:${conversationId}`
+                    : `customer:${customerId}`,
+            },
+            { conversationId, customerId },
+        ),
+    )
 })
 
 async function boundSession(req: Request) {
@@ -446,7 +531,7 @@ router.post("/cancel", async (req, res) => {
 })
 
 router.use(
-    (error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    (error: unknown, req: Request, res: Response, _next: NextFunction) => {
         if (!isHttpError(error))
             logger.error("Help Scout sidebar request failed", {
                 error: error instanceof Error ? error.message : "Unknown error",
@@ -457,7 +542,12 @@ router.use(
                 sidebarMessage(
                     isHttpError(error)
                         ? error.message
-                        : "Could not update subscriptions. Refresh and try again.",
+                        : req.path.startsWith("/klaviyo")
+                          ? "Could not load the Klaviyo profile. Refresh and try again."
+                          : "Could not update subscriptions. Refresh and try again.",
+                    req.path.startsWith("/klaviyo")
+                        ? "klaviyo"
+                        : "subscriptions",
                 ),
             )
     },

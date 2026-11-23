@@ -1,3 +1,4 @@
+import createHttpError from "http-errors"
 import { randomBytes } from "crypto"
 import type Stripe from "stripe"
 import { config } from "../config/index.ts"
@@ -255,7 +256,75 @@ function balances(
     }
 }
 
+export interface KlaviyoProfile {
+    id: string
+    attributes: {
+        email?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        phone_number?: string | null
+        created?: string | null
+        updated?: string | null
+        properties?: Record<string, unknown> | null
+    }
+}
+
 export class KlaviyoService {
+    /** Read-only lookup for authorized Help Scout agents; credentials stay on the server. */
+    async profileByEmail(email: string): Promise<KlaviyoProfile | null> {
+        if (!config.KLAVIYO_PRIVATE_API_KEY)
+            throw createHttpError(503, "Klaviyo is not configured.")
+        const query = new URLSearchParams({
+            filter: `equals(email,${JSON.stringify(email)})`,
+            "page[size]": "1",
+        })
+        let response: Response
+        try {
+            response = await fetch(`${API}/profiles?${query.toString()}`, {
+                headers: {
+                    Authorization: `Klaviyo-API-Key ${config.KLAVIYO_PRIVATE_API_KEY}`,
+                    revision: REVISION,
+                    accept: "application/vnd.api+json",
+                },
+                signal: AbortSignal.timeout(10000),
+                redirect: "error",
+            })
+        } catch {
+            throw createHttpError(
+                502,
+                "Klaviyo is unavailable. Refresh the profile to retry.",
+            )
+        }
+        if (!response.ok)
+            throw createHttpError(
+                response.status === 429 ? 503 : 502,
+                response.status === 429
+                    ? "Klaviyo is busy. Wait a moment and refresh the profile."
+                    : "Could not read Klaviyo. Check that the API key has profiles:read permission.",
+            )
+        const body = (await response.json()) as {
+            data?: Partial<KlaviyoProfile>[]
+        }
+        if (!Array.isArray(body.data))
+            throw createHttpError(
+                502,
+                "Klaviyo returned an incomplete profile response.",
+            )
+        const profile = body.data[0] ?? null
+        if (!profile) return null
+        if (
+            typeof profile.id !== "string" ||
+            !profile.attributes ||
+            profile.attributes.email?.trim().toLowerCase() !==
+                email.trim().toLowerCase()
+        )
+            throw createHttpError(502, "Klaviyo returned a mismatched profile.")
+        return {
+            id: profile.id,
+            attributes: profile.attributes,
+        }
+    }
+
     // ponytail: in-memory queue, a restart drops what is still waiting; move it to a Mongo outbox if that matters
     private queue: Job[] = []
     private running = false

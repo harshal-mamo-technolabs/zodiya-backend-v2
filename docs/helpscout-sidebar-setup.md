@@ -52,3 +52,18 @@ Forms carry a 15-minute signed token scoped to the customer, conversation and di
 Responses disable caching and referrers and permit embedding only by `https://secure.helpscout.net`. Audit logs record the account, conversation or Help Scout customer ID, signed Help Scout `user-id` when supplied, subscription ID, purchase kind and cancellation reason. If Help Scout omits `user-id`, the audit entry states that the agent ID was not supplied; it does not infer an actor from the conversation assignee.
 
 Help Scout callback signatures have no documented expiry. Treat signed callback URLs and form tokens as sensitive; do not share them. Only enable this app in the intended inbox.
+
+
+## Klaviyo Profile in the current AstroMeridian backend
+
+The replacement profile panel is served by this repository at:
+
+`https://api.astromeridian.net/helpscout/sidebar/klaviyo`
+
+It uses the same bundled Help Scout SDK and frame policy as the subscription panel. It reads the selected customer through the Help Scout Inbox API, verifies the agent has access to the AstroMeridian inbox, and performs a server-side Klaviyo lookup. There is no dependency on the old `zodiya.net` API, nor a requirement for a local user account (Klaviyo leads can be shown). Profile context tokens cannot call billing endpoints.
+
+Deploy the backend first (`npm run build` includes the browser bundle). Retain the existing Help Scout environment variables and configure `KLAVIYO_PRIVATE_API_KEY` with `profiles:read` permission. If reusing the existing Klaviyo Profile app, set `HELPSCOUT_PROFILE_SIDEBAR_SECRET` to its existing Content signature key; a local, gitignored deployment snippet is in `logs/helpscout-klaviyo.env`. The optional setting falls back to `HELPSCOUT_SIDEBAR_SECRET` for a new app using the cancellation app's signing configuration. All credentials stay on the server.
+
+After deploying, an unsigned request to the new callback should return **401**, rather than 404. In the AstroMeridian Klaviyo Profile app's **App Information**, replace the old Content URL (`https://zodiya.net/api/helpscout/sidebar`) with the new URL above. Retain the existing app name, signing key and inbox assignment; clear the old Side Panel URLs entry since the replacement does not use a separate side panel. Reusing the installation replaces the old sidebar without creating a duplicate. Do not change the Bazzingo/Testbrain Klaviyo Profile installation.
+
+The old callback should remain connected until the replacement is deployed. The profile view groups subscription, balances, contact details, attribution and other properties, retains zero and false values, formats dates in UTC, and expands long URLs on demand. Refresh profile and SDK context changes recheck the current Help Scout customer. Contacts with multiple emails require a conversation with the intended primary email; the panel does not guess an account.

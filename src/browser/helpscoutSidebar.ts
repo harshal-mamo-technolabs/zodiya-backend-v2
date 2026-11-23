@@ -7,6 +7,37 @@ function element(id: string) {
 }
 const panel = element("sidebar-panel")
 const config = element("sidebar-config")
+// Help Scout owns scrolling; resize the frame when forms expand or data changes.
+let lastHeight = 0
+const resize = new ResizeObserver(() => {
+    const height = Math.ceil(document.body.getBoundingClientRect().height)
+    if (height !== lastHeight) {
+        lastHeight = height
+        HelpScout.setAppHeight(height)
+    }
+})
+resize.observe(document.body)
+window.addEventListener(
+    "pagehide",
+    () => {
+        resize.disconnect()
+    },
+    { once: true },
+)
+
+document.addEventListener("change", (event) => {
+    if (
+        !(event.target instanceof HTMLSelectElement) ||
+        event.target.id !== "reason"
+    )
+        return
+    const details = document.getElementById("other-details")
+    const other = document.getElementById("other")
+    const show = event.target.value === "Other"
+    if (details) details.hidden = !show
+    if (other instanceof HTMLTextAreaElement) other.disabled = !show
+})
+
 let currentKey = config.dataset.contextId ?? ""
 let activeRequest: AbortController | undefined
 let revision = 0
@@ -83,7 +114,11 @@ async function updateContext(context: Context) {
         activeRequest?.abort()
         revision++
         currentKey = ""
-        message("Select a customer in Help Scout to manage their subscription.")
+        message(
+            config.dataset.view === "klaviyo"
+                ? "Select a customer in Help Scout to view their Klaviyo profile."
+                : "Select a customer in Help Scout to manage their subscription.",
+        )
         return
     }
     currentKey = key
@@ -92,7 +127,7 @@ async function updateContext(context: Context) {
     if (conversationId) body.set("conversationId", String(conversationId))
     else if (customerId) body.set("customerId", String(customerId))
     if (context.mailbox?.id) body.set("mailboxId", String(context.mailbox.id))
-    await load("/helpscout/sidebar/context", body)
+    await load(config.dataset.endpoint ?? "/helpscout/sidebar/context", body)
 }
 
 // Keep the original iframe alive: SDK context must keep following the selected chat.
